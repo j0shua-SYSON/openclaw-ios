@@ -18,7 +18,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <unistd.h>
-#include <pthread.h>
+#include <dlfcn.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/utsname.h>
@@ -33,9 +33,10 @@
 static const uint32_t CODE[] = { 0x52800540, 0xd65f03c0 };
 typedef int (*fn_t)(void);
 
-// Weak so the probe links + runs even if the SDK/runtime lacks it.
-extern void pthread_jit_write_protect_np(int) __attribute__((weak_import));
-extern int  pthread_jit_write_protect_supported_np(void) __attribute__((weak_import));
+// The SDK marks pthread_jit_write_protect_np "unavailable on iOS", so resolve at
+// runtime via dlsym — this both compiles and tells us if the symbol exists on-device.
+typedef void (*jit_wp_t)(int);
+typedef int  (*jit_wp_supported_t)(void);
 
 static int emit_and_call(void *m) {
     memcpy(m, CODE, sizeof(CODE));
@@ -56,12 +57,13 @@ static int t_rwx_mmap(void) {
 
 // Strategy 2: MAP_JIT region toggled with pthread_jit_write_protect_np (Apple hardened-JIT path).
 static int t_map_jit(void) {
+    jit_wp_t wp = (jit_wp_t)dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
     void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (m == MAP_FAILED) { fprintf(stderr, "mmap MAP_JIT failed: %s\n", strerror(errno)); return 0; }
-    if (&pthread_jit_write_protect_np) pthread_jit_write_protect_np(0); // make writable
+    if (wp) wp(0); // make writable
     memcpy(m, CODE, sizeof(CODE));
-    if (&pthread_jit_write_protect_np) pthread_jit_write_protect_np(1); // make executable
+    if (wp) wp(1); // make executable
     __builtin___clear_cache((char *)m, (char *)m + sizeof(CODE));
     int r = ((fn_t)m)();
     munmap(m, 4096);
@@ -114,8 +116,10 @@ int main(void) {
     printf("kernel: %s %s (%s)\n", u.sysname, u.release, u.machine);
     printf("uid=%d euid=%d pid=%d\n", getuid(), geteuid(), getpid());
     printf("[exec] basic execution PASS\n");
-    printf("[jit ] pthread_jit_write_protect_supported_np=%d\n",
-           (&pthread_jit_write_protect_supported_np) ? pthread_jit_write_protect_supported_np() : -1);
+    jit_wp_supported_t sup = (jit_wp_supported_t)dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_supported_np");
+    printf("[jit ] pthread_jit_write_protect_np present=%d supported=%d\n",
+           dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np") != NULL,
+           sup ? sup() : -1);
 
     printf("[fork] %s\n", t_fork() ? "PASS" : "FAIL");
 
