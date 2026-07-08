@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <libkern/OSCacheControl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/utsname.h>
@@ -40,7 +41,7 @@ typedef int  (*jit_wp_supported_t)(void);
 
 static int emit_and_call(void *m) {
     memcpy(m, CODE, sizeof(CODE));
-    __builtin___clear_cache((char *)m, (char *)m + sizeof(CODE));
+    sys_icache_invalidate(m, sizeof(CODE));
     fn_t f = (fn_t)m;
     return f();
 }
@@ -64,7 +65,7 @@ static int t_map_jit(void) {
     if (wp) wp(0); // make writable
     memcpy(m, CODE, sizeof(CODE));
     if (wp) wp(1); // make executable
-    __builtin___clear_cache((char *)m, (char *)m + sizeof(CODE));
+    sys_icache_invalidate(m, sizeof(CODE));
     int r = ((fn_t)m)();
     munmap(m, 4096);
     return r == 42;
@@ -78,7 +79,7 @@ static int t_wx_mprotect(void) {
     if (mprotect(m, 4096, PROT_READ | PROT_EXEC) != 0) {
         fprintf(stderr, "mprotect RX failed: %s\n", strerror(errno)); munmap(m, 4096); return 0;
     }
-    __builtin___clear_cache((char *)m, (char *)m + sizeof(CODE));
+    sys_icache_invalidate(m, sizeof(CODE));
     int r = ((fn_t)m)();
     munmap(m, 4096);
     return r == 42;
