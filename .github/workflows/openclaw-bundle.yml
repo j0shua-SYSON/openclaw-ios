@@ -1,0 +1,71 @@
+name: openclaw-bundle
+
+# Produce the platform-independent OpenClaw runtime tree to ship on iOS.
+# Per the recon audit, OpenClaw's shippable form is a plain `npm install --omit=dev`
+# node_modules tree (dist is NOT self-contained; deps are externalized). The gateway is
+# pure JS + WASM at runtime; node:sqlite is built into our Node binary. So this tree is
+# arch-independent — the only iOS-specific artifact is the Node binary (built separately).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "openclaw npm version"
+        default: "2026.6.11"
+  push:
+    paths:
+      - ".github/workflows/openclaw-bundle.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    env:
+      OPENCLAW_VERSION: ${{ github.event.inputs.version || '2026.6.11' }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install OpenClaw production tree
+        run: |
+          set -euxo pipefail
+          mkdir -p payload && cd payload
+          npm init -y >/dev/null
+          # --omit=dev: no dev deps. --omit=optional: skip sqlite-vec (native, unusable on iOS).
+          npm install "openclaw@${OPENCLAW_VERSION}" \
+            --omit=dev --omit=optional --no-audit --no-fund --loglevel=http
+          echo "=== installed openclaw version ==="
+          node -p "require('openclaw/package.json').version"
+
+      - name: Inspect + prune wrong-arch native artifacts
+        run: |
+          set -euxo pipefail
+          cd payload
+          echo "=== total size ==="; du -sh node_modules | cut -f1
+          echo "=== native .node files present (built for linux; harmless but useless on iOS) ==="
+          find node_modules -name "*.node" | head -50 || true
+          echo "=== @lydell/node-pty layout ==="; ls node_modules/@lydell/node-pty 2>/dev/null || echo "(node-pty absent)"
+          echo "=== bin entry ==="; ls -la node_modules/.bin/openclaw node_modules/openclaw/openclaw.mjs 2>/dev/null || true
+          echo "=== wasm assets ==="; find node_modules -name "*.wasm" | head -50 || true
+
+      - name: Package payload
+        run: |
+          set -euxo pipefail
+          cd payload
+          tar -czf ../openclaw-${OPENCLAW_VERSION}-payload.tgz node_modules
+          cd ..
+          ls -la openclaw-*-payload.tgz
+          du -h openclaw-*-payload.tgz
+
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release view openclaw-bundle -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create openclaw-bundle -R "$GITHUB_REPOSITORY" \
+                 --title "OpenClaw runtime bundle" --notes "npm --omit=dev tree" --prerelease
+          gh release upload openclaw-bundle "openclaw-${OPENCLAW_VERSION}-payload.tgz" --clobber -R "$GITHUB_REPOSITORY"
