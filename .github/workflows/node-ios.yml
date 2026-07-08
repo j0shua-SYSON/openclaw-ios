@@ -1,0 +1,151 @@
+name: node-ios-arm64
+
+# Cross-compile Node.js for jailbroken iOS 15 arm64 (Dopamine, iPhone 6s Plus / A9).
+# The make-or-break part of the port: OpenClaw requires Node >=22.19 (node:sqlite is
+# boot-critical) and no one has published a Node >=22 iphoneos-arm64 binary.
+#
+# Strategy: build a standard (JIT-capable) Node so we can test BOTH JIT (Spike A proved
+# the device grants RWX via mprotect to a dynamic-codesigning-entitled binary) and
+# --jitless on-device from one artifact. Fallback: Node 24 + DrumBrake jitless WASM.
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_ref:
+        description: "Node git tag to build"
+        default: "v22.19.0"
+      jitless:
+        description: "Bake --jitless into the build (v8-options)"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - ".github/workflows/node-ios.yml"
+      - "patches/node-ios/**"
+      - "scripts/build-node-ios.sh"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14 # arm64 host: same CPU as target (iOS arm64), different OS/sysroot
+    timeout-minutes: 110
+    env:
+      NODE_REF: ${{ github.event.inputs.node_ref || 'v22.19.0' }}
+      IOS_MIN: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain + SDK info
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "iphoneos SDK version: $(xcrun --sdk iphoneos --show-sdk-version)"
+          clang --version
+          sysctl -n hw.ncpu
+          brew list ldid >/dev/null 2>&1 || brew install ldid
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-node-ios-${{ env.NODE_REF }}-${{ hashFiles('patches/node-ios/**') }}
+          restore-keys: |
+            ccache-node-ios-${{ env.NODE_REF }}-
+            ccache-node-ios-
+
+      - name: Clone Node ${{ env.NODE_REF }}
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$NODE_REF" https://github.com/nodejs/node.git node-src
+          echo "node version file:"; cat node-src/src/node_version.h | grep -E "NODE_(MAJOR|MINOR|PATCH)" | head -3
+
+      - name: Apply iOS patches (if any)
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          shopt -s nullglob
+          for p in ../patches/node-ios/*.patch; do
+            echo "== applying $p =="
+            git apply --verbose "$p"
+          done
+          echo "patches applied (or none present)"
+
+      - name: Configure (iphoneos-arm64, min iOS ${{ env.IOS_MIN }})
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          export IPHONEOS_DEPLOYMENT_TARGET="$IOS_MIN"
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_MAXSIZE=3G
+
+          # target = iOS arm64 (with sdk); host tools = macOS arm64 (default sdk)
+          export CC="ccache clang -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          export CXX="ccache clang++ -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          export CC_host="ccache clang"
+          export CXX_host="ccache clang++"
+          export LDFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          export GYP_DEFINES="target_arch=arm64 host_arch=arm64 host_os=mac target_os=ios"
+
+          JITLESS_OPT=""
+          if [ "${{ github.event.inputs.jitless }}" = "true" ]; then
+            JITLESS_OPT="--v8-options=--jitless"
+          fi
+
+          python3 configure \
+            --dest-os=ios \
+            --dest-cpu=arm64 \
+            --cross-compiling \
+            --with-intl=small-icu \
+            --without-npm \
+            --without-node-snapshot \
+            --without-node-code-cache \
+            --without-inspector \
+            --openssl-no-asm \
+            $JITLESS_OPT
+          echo "=== configure done ==="
+
+      - name: Build
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          export CCACHE_DIR="$HOME/.ccache"
+          make -j"$(sysctl -n hw.ncpu)" 2>&1 | tail -n 4000
+          echo "=== build done ==="
+
+      - name: Verify + sign
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          ls -la out/Release/node
+          file out/Release/node
+          otool -l out/Release/node | grep -A4 -E "LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS" || true
+          cat > ent.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>platform-application</key><true/>
+            <key>com.apple.private.security.no-container</key><true/>
+            <key>dynamic-codesigning</key><true/>
+            <key>get-task-allow</key><true/>
+          </dict></plist>
+          EOF
+          ldid -Sent.plist out/Release/node
+          echo "size: $(du -h out/Release/node | cut -f1)"
+
+      - name: Publish node binary to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          cp out/Release/node "node-${NODE_REF}-iphoneos-arm64"
+          cp ent.plist "ent.plist"
+          gh release view node-ios -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create node-ios -R "$GITHUB_REPOSITORY" \
+                 --title "Node for iOS arm64" --notes "Cross-compiled Node for jailbroken iOS 15 arm64" --prerelease
+          gh release upload node-ios "node-${NODE_REF}-iphoneos-arm64" ent.plist --clobber -R "$GITHUB_REPOSITORY"
