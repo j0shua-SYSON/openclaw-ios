@@ -1,0 +1,11 @@
+Package: ai.openclaw.gateway
+Name: OpenClaw Gateway
+Version: @VERSION@
+Architecture: iphoneos-arm64
+Maintainer: Joshua Son <dreamdew00dev@gmail.com>
+Author: OpenClaw
+Section: System
+Description: OpenClaw personal AI assistant gateway, native on-device.
+ Ships a cross-compiled Node.js runtime plus the OpenClaw gateway and runs it as a
+ launchd daemon. Configure with `openclaw onboard` over SSH after install.
+Depiction: https://github.com/j0shua-SYSON/openclaw-ios
