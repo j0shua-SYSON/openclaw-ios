@@ -38,7 +38,7 @@ jobs:
           npm install "openclaw@${OPENCLAW_VERSION}" \
             --omit=dev --omit=optional --no-audit --no-fund --loglevel=http
           echo "=== installed openclaw version ==="
-          node -p "require('openclaw/package.json').version"
+          node -p "JSON.parse(require('fs').readFileSync('node_modules/openclaw/package.json','utf8')).version"
 
       - name: Inspect + prune wrong-arch native artifacts
         run: |
