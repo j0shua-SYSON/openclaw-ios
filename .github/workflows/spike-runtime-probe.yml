@@ -1,0 +1,48 @@
+name: spike-runtime-probe
+
+# Cheap foundational spike: build a tiny arm64 iOS Mach-O that tests exec / JIT / fork
+# under Dopamine. Everything else (the Node build, the .deb) is worthless if this fails.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "spikes/runtime-probe/**"
+      - ".github/workflows/spike-runtime-probe.yml"
+
+jobs:
+  build-probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version || true
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "iphoneos SDK version: $(xcrun --sdk iphoneos --show-sdk-version)"
+          xcrun --sdk iphoneos clang --version
+
+      - name: Compile probe (arm64, iphoneos, min iOS 15)
+        working-directory: spikes/runtime-probe
+        run: |
+          set -euxo pipefail
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -miphoneos-version-min=15.0 \
+            -O0 -Wall \
+            -o probe probe.c
+          file probe
+          # Show the load command platform so we can confirm it's an iOS (not macOS) binary
+          otool -l probe | grep -A4 -E "LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS" || true
+          # Ad-hoc sign in CI too (codesign) as a baseline; the device will re-sign with ldid + ents.
+          codesign -f -s - probe || true
+
+      - name: Upload probe + entitlements
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-probe
+          path: |
+            spikes/runtime-probe/probe
+            spikes/runtime-probe/ents.plist
+          if-no-files-found: error
