@@ -10,6 +10,9 @@ on:
       - "spikes/runtime-probe/**"
       - ".github/workflows/spike-runtime-probe.yml"
 
+permissions:
+  contents: write
+
 jobs:
   build-probe:
     runs-on: macos-14
@@ -38,11 +41,17 @@ jobs:
           # Ad-hoc sign in CI too (codesign) as a baseline; the device will re-sign with ldid + ents.
           codesign -f -s - probe || true
 
-      - name: Upload probe + entitlements
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-probe
-          path: |
-            spikes/runtime-probe/probe
-            spikes/runtime-probe/ents.plist
-          if-no-files-found: error
+      # Publish to a Release instead of an artifact: release storage is separate from
+      # the Actions artifact quota (which is exhausted on this account) and is how the
+      # final .deb will ship anyway.
+      - name: Publish probe to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: spikes/runtime-probe
+        run: |
+          set -euxo pipefail
+          gh release view spike-probe -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create spike-probe -R "$GITHUB_REPOSITORY" \
+                 --title "spike: runtime probe" \
+                 --notes "arm64 iOS runtime probe (exec/JIT/fork)" --prerelease
+          gh release upload spike-probe probe ents.plist --clobber -R "$GITHUB_REPOSITORY"
