@@ -92,7 +92,9 @@ jobs:
           export CC="ccache clang -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
           export CXX="ccache clang++ -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
           export CC_host="ccache clang"
-          export CXX_host="ccache clang++"
+          # Host tools (simdutf, torque, ...) need an explicit modern C++ std; without it
+          # Apple clang defaults too old and simdutf.h's brace-init constructors fail to parse.
+          export CXX_host="ccache clang++ -std=gnu++20"
           export LDFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
           export GYP_DEFINES="target_arch=arm64 host_arch=arm64 host_os=mac target_os=ios"
 
