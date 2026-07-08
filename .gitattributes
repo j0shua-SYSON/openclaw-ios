@@ -1,0 +1,7 @@
+# Keep everything LF. Debian maintainer scripts (postinst/prerm) and shell
+# scripts MUST be LF or dpkg/sh on-device will choke on CR.
+* text=auto eol=lf
+*.png binary
+*.jp2 binary
+*.deb binary
+*.node binary
