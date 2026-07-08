@@ -90,7 +90,9 @@ jobs:
 
           # target = iOS arm64 (with sdk); host tools = macOS arm64 (default sdk)
           export CC="ccache clang -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
-          export CXX="ccache clang++ -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          # -std=gnu++20 on the target too: this cross setup doesn't inherit Node's -std,
+          # and V8 12.4 (Node 22) + gtest require C++20/17.
+          export CXX="ccache clang++ -std=gnu++20 -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
           export CC_host="ccache clang"
           # Host tools (simdutf, torque, ...) need an explicit modern C++ std; without it
           # Apple clang defaults too old and simdutf.h's brace-init constructors fail to parse.
