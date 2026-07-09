@@ -1,0 +1,12 @@
+#!/bin/sh
+# OpenClaw CLI wrapper — runs the bundled iOS Node against the OpenClaw entrypoint.
+# Lets you run `openclaw onboard`, `openclaw gateway status`, etc. over SSH.
+PREFIX=/var/jb
+APP="$PREFIX/usr/libexec/openclaw"
+export OPENCLAW_NO_RESPAWN=1
+export HOME="${OPENCLAW_HOME:-$PREFIX/var/lib/openclaw}"
+export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME}"
+export UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-2}"
+mkdir -p "$HOME" 2>/dev/null || true
+exec "$APP/node" --disable-warning=ExperimentalWarning \
+  "$APP/node_modules/openclaw/openclaw.mjs" "$@"
