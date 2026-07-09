@@ -7,6 +7,7 @@ export OPENCLAW_NO_RESPAWN=1
 export HOME="${OPENCLAW_HOME:-$PREFIX/var/lib/openclaw}"
 export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME}"
 export UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-2}"
+export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning}"
-mkdir -p "$HOME" 2>/dev/null || true
+mkdir -p "$HOME" "$TMPDIR" 2>/dev/null || true
 exec "$APP/node" "$APP/node_modules/openclaw/openclaw.mjs" "$@"
