@@ -22,7 +22,7 @@ on:
     paths:
       - ".github/workflows/node-ios.yml"
       - "patches/node-ios/**"
-      - "scripts/build-node-ios.sh"
+      - "scripts/ios-source-fixups.sh"
 
 permissions:
   contents: write
@@ -78,6 +78,9 @@ jobs:
             git apply --verbose "$p"
           done
           echo "patches applied (or none present)"
+
+      - name: iOS source fixups
+        run: bash scripts/ios-source-fixups.sh node-src
 
       - name: Configure (iphoneos-arm64, min iOS ${{ env.IOS_MIN }})
         working-directory: node-src
