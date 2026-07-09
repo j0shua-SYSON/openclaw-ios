@@ -173,7 +173,6 @@ jobs:
         run: |
           set -euxo pipefail
           cp out/Release/node "node-${NODE_REF}-iphoneos-arm64"
-          cp ent.plist "ent.plist"
           gh release view node-ios -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create node-ios -R "$GITHUB_REPOSITORY" \
                  --title "Node for iOS arm64" --notes "Cross-compiled Node for jailbroken iOS 15 arm64" --prerelease
