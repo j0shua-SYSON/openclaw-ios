@@ -25,6 +25,25 @@ open(p, "w").write(s)
 print("fixup: stripped -Wl,--start-group/--end-group from gyp make link templates")
 PY
 
+# --- Node crypto: macOS-only keychain CA reader ---
+# src/crypto/crypto_context.cc guards its macOS system-keychain cert reader with
+# `#ifdef __APPLE__`, but it uses SecTrustSettings* — a macOS-only Security API absent on
+# iOS (where __APPLE__ is still defined). Narrow the guard to TARGET_OS_OSX so it's
+# excluded on iOS. We don't need it: Node's bundled Mozilla roots handle TLS.
+python3 - "src/crypto/crypto_context.cc" <<'PY'
+import sys
+f = sys.argv[1]
+s = open(f).read()
+orig = s
+if "TargetConditionals.h" not in s:
+    s = "#if defined(__APPLE__)\n#include <TargetConditionals.h>\n#endif\n" + s
+s = s.replace("#ifdef __APPLE__", "#if defined(__APPLE__) && TARGET_OS_OSX")
+if s == orig:
+    raise SystemExit("crypto_context.cc fixup matched nothing — Node layout changed?")
+open(f, "w").write(s)
+print("fixup: crypto_context.cc macOS keychain code guarded with TARGET_OS_OSX")
+PY
+
 # --- c-ares ---
 # Node's cares.gyp uses config/darwin for both mac and ios, but the iOS SDK does NOT
 # ship <sys/random.h> (it has arc4random_buf instead). Undef the header macro so
