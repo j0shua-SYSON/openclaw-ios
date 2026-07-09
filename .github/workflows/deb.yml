@@ -1,0 +1,101 @@
+name: deb
+
+# Assemble the installable rootless .deb from: the iOS Node binary (node-ios release),
+# the OpenClaw payload (openclaw-bundle release), and the packaging/ scaffold.
+# Runs on Linux — the Node binary is already ldid-signed in CI, and shell scripts need no
+# signing, so only dpkg-deb is required here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_ref:
+        description: "Node tag used for the iOS binary asset"
+        default: "v22.19.0"
+      openclaw_version:
+        description: "openclaw payload version"
+        default: "2026.6.11"
+  push:
+    paths:
+      - ".github/workflows/deb.yml"
+      - "packaging/**"
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    env:
+      NODE_REF: ${{ github.event.inputs.node_ref || 'v22.19.0' }}
+      OCV: ${{ github.event.inputs.openclaw_version || '2026.6.11' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download node binary + OpenClaw payload from releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dl
+          gh release download node-ios -R "$GITHUB_REPOSITORY" \
+            -p "node-${NODE_REF}-iphoneos-arm64" -p "ent.plist" -D dl --clobber
+          gh release download openclaw-bundle -R "$GITHUB_REPOSITORY" \
+            -p "openclaw-${OCV}-payload.tgz" -D dl --clobber
+          ls -la dl
+
+      - name: Stage package tree
+        run: |
+          set -euxo pipefail
+          PKG=pkgroot
+          APP="$PKG/var/jb/usr/libexec/openclaw"
+          mkdir -p "$APP" "$PKG/var/jb/usr/bin" "$PKG/var/jb/Library/LaunchDaemons" "$PKG/DEBIAN"
+
+          # iOS node binary (+ entitlements for optional on-device re-sign)
+          cp "dl/node-${NODE_REF}-iphoneos-arm64" "$APP/node"
+          cp dl/ent.plist "$APP/entitlements.plist"
+
+          # OpenClaw runtime tree -> $APP/node_modules
+          tar -xzf "dl/openclaw-${OCV}-payload.tgz" -C "$APP"
+
+          # wrappers + daemon
+          cp packaging/bin/openclaw "$PKG/var/jb/usr/bin/openclaw"
+          cp packaging/libexec/run-gateway.sh "$APP/run-gateway.sh"
+          cp packaging/ai.openclaw.gateway.plist "$PKG/var/jb/Library/LaunchDaemons/ai.openclaw.gateway.plist"
+
+          # control + maintainer scripts
+          VERSION="${OCV}-ios${GITHUB_RUN_NUMBER}"
+          sed "s/@VERSION@/${VERSION}/" packaging/control > "$PKG/DEBIAN/control"
+          cp packaging/postinst "$PKG/DEBIAN/postinst"
+          cp packaging/prerm "$PKG/DEBIAN/prerm"
+
+          # perms
+          chmod 0755 "$APP/node" "$APP/run-gateway.sh" \
+                     "$PKG/var/jb/usr/bin/openclaw" \
+                     "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/prerm"
+          chmod 0644 "$PKG/var/jb/Library/LaunchDaemons/ai.openclaw.gateway.plist"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "=== staged tree ==="; find "$PKG" -maxdepth 6 -type f | head -60
+          echo "=== payload size ==="; du -sh "$APP/node_modules" | cut -f1
+
+      - name: Build .deb
+        run: |
+          set -euxo pipefail
+          DEB="ai.openclaw.gateway_${VERSION}_iphoneos-arm64.deb"
+          # -Zxz for broad Sileo/Zebra compatibility; root-owner-group so payload is root:root.
+          dpkg-deb -Zxz --root-owner-group -b pkgroot "$DEB"
+          echo "DEB=$DEB" >> "$GITHUB_ENV"
+          ls -la "$DEB"
+          echo "=== control ==="; dpkg-deb -I "$DEB"
+          echo "=== contents (head) ==="; dpkg-deb -c "$DEB" | head -40
+
+      - name: Publish .deb to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release view deb -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create deb -R "$GITHUB_REPOSITORY" \
+                 --title "OpenClaw iOS .deb" --notes "Install via Sileo or dpkg -i" --prerelease
+          gh release upload deb "$DEB" --clobber -R "$GITHUB_REPOSITORY"
+          echo "Published $DEB"
