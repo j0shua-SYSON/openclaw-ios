@@ -2,7 +2,7 @@ Package: ai.openclaw.gateway
 Name: OpenClaw Gateway
 Version: @VERSION@
 Architecture: iphoneos-arm64
-Maintainer: Joshua Son <dreamdew00dev@gmail.com>
+Maintainer: j0shua-SYSON <j0shua-SYSON@users.noreply.github.com>
 Author: OpenClaw
 Section: System
 Description: OpenClaw personal AI assistant gateway, native on-device.
