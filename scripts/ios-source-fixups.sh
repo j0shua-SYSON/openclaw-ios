@@ -109,7 +109,7 @@ s = open(p).read(); o = s
 anchor = '#include "src/utils/allocation.h"\n\nnamespace v8 {'
 inject = '''#include "src/utils/allocation.h"
 
-#if defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64)
+#if defined(V8_OS_IOS)
 #include <sys/mman.h>
 namespace {
 void* g_ios_jit_base = nullptr;
@@ -149,7 +149,7 @@ void RwxMemoryWriteScope::SetWritable() {}
 
 // static
 void RwxMemoryWriteScope::SetExecutable() {}'''
-inject = '''#if defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64)
+inject = '''#if defined(V8_OS_IOS)
 extern "C" void v8_ios_jit_wx_set_writable();
 extern "C" void v8_ios_jit_wx_set_executable();
 // static
@@ -179,7 +179,7 @@ anchor = '''    if (!params.page_allocator->DiscardSystemPages(base, size)) retu
 }'''
 inject = '''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
   }
-#if defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64)
+#if defined(V8_OS_IOS)
   {
     extern "C" void v8_ios_jit_wx_register_range(void*, unsigned long);
     v8_ios_jit_wx_register_range(reinterpret_cast<void*>(base()), size());
