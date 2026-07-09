@@ -9,6 +9,14 @@ case "$1" in
   configure|"")
     mkdir -p "$PREFIX/var/lib/openclaw" "$PREFIX/var/log" 2>/dev/null || true
 
+    # Pre-create a minimal config so the gateway boots (gateway.mode=local) instead of
+    # exiting 78 and crash-looping under launchd before the user runs `openclaw onboard`.
+    CFG="$PREFIX/var/lib/openclaw/openclaw.json"
+    if [ ! -f "$CFG" ]; then
+      printf '{\n  "gateway": { "mode": "local" }\n}\n' > "$CFG"
+      chmod 0600 "$CFG" 2>/dev/null || true
+    fi
+
     chmod 0755 "$NODE" "$APP/run-gateway.sh" "$PREFIX/usr/bin/openclaw" 2>/dev/null || true
     chown root:wheel "$PLIST" 2>/dev/null || true
     chmod 0644 "$PLIST" 2>/dev/null || true
