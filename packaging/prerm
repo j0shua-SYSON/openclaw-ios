@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+PREFIX=/var/jb
+PLIST="$PREFIX/Library/LaunchDaemons/ai.openclaw.gateway.plist"
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    launchctl bootout system "$PLIST" 2>/dev/null \
+      || launchctl bootout system/ai.openclaw.gateway 2>/dev/null \
+      || launchctl unload -w "$PLIST" 2>/dev/null || true
+    ;;
+esac
+exit 0

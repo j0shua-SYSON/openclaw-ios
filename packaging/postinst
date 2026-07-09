@@ -1,0 +1,32 @@
+#!/bin/sh
+set -e
+PREFIX=/var/jb
+APP="$PREFIX/usr/libexec/openclaw"
+PLIST="$PREFIX/Library/LaunchDaemons/ai.openclaw.gateway.plist"
+NODE="$APP/node"
+
+case "$1" in
+  configure|"")
+    mkdir -p "$PREFIX/var/lib/openclaw" "$PREFIX/var/log" 2>/dev/null || true
+
+    chmod 0755 "$NODE" "$APP/run-gateway.sh" "$PREFIX/usr/bin/openclaw" 2>/dev/null || true
+    chown root:wheel "$PLIST" 2>/dev/null || true
+    chmod 0644 "$PLIST" 2>/dev/null || true
+
+    # Defensive (re)sign node with JIT entitlements using the on-device ldid.
+    # The binary is already ldid-signed in CI; Dopamine trust-caches adhoc sigs at spawn,
+    # so this is belt-and-suspenders and non-fatal.
+    if [ -x "$PREFIX/usr/bin/ldid" ] && [ -f "$APP/entitlements.plist" ]; then
+      "$PREFIX/usr/bin/ldid" -S"$APP/entitlements.plist" "$NODE" 2>/dev/null || true
+    fi
+
+    # Load + (re)start the daemon (modern domain syntax, legacy fallback).
+    launchctl bootstrap system "$PLIST" 2>/dev/null \
+      || launchctl load -w "$PLIST" 2>/dev/null || true
+    launchctl kickstart -k system/ai.openclaw.gateway 2>/dev/null || true
+
+    echo "OpenClaw gateway installed. Configure over SSH with: openclaw onboard"
+    echo "Logs: $PREFIX/var/log/openclaw.log"
+    ;;
+esac
+exit 0
