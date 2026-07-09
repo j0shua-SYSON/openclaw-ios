@@ -2,9 +2,9 @@
 
 # 🦞📱 OpenClaw‑iOS
 
-### A full Node.js AI‑assistant gateway, running **natively on a jailbroken iPhone 6s Plus**
+### A full Node.js AI‑assistant gateway, running **natively on jailbroken iOS**
 
-*No Mac. No Xcode on your machine. No App Store. Built entirely in GitHub Actions and installed as a Sileo `.deb`.*
+*Cross‑compiled in the cloud, installed as a rootless Sileo `.deb`. No Mac, no Xcode, no App Store.*
 
 <!-- badges -->
 [![node-ios build](https://github.com/j0shua-SYSON/openclaw-ios/actions/workflows/node-ios.yml/badge.svg)](https://github.com/j0shua-SYSON/openclaw-ios/actions/workflows/node-ios.yml)
@@ -18,16 +18,16 @@
 
 ---
 
-> **TL;DR** — This repo cross‑compiles **Node.js 22 for iOS** (something no public build had shipped — the ceilings were Node 17–18), then packages the [OpenClaw](https://github.com/openclaw/openclaw) personal‑AI‑assistant gateway + that runtime into a **rootless `.deb`** you can install from **Sileo** on a Dopamine‑jailbroken device. Your 2015 iPhone becomes an always‑on, on‑device AI gateway.
+> **TL;DR** — This repo cross‑compiles **Node.js 22 for iOS** (something no public build had shipped — the ceilings were Node 17–18), then packages the [OpenClaw](https://github.com/openclaw/openclaw) personal‑AI‑assistant gateway + that runtime into a **rootless `.deb`** you can install from **Sileo** on a Dopamine‑jailbroken device. Your old iPhone becomes an always‑on, on‑device AI gateway.
 
 ## ✨ Why this is fun
 
-- 🧠 **A real AI assistant on a 10‑year‑old phone.** OpenClaw is a full Node gateway — multi‑channel chat (Telegram/Discord/Slack/…), tools, cron, sessions — and it runs *on the device itself*, not phoning home to a server.
+- 🧠 **A real AI assistant, on‑device — even on a decade‑old iPhone.** OpenClaw is a full Node gateway — multi‑channel chat (Telegram/Discord/Slack/…), tools, cron, sessions — and it runs *on the device itself*, not phoning home to a server.
 - 🛠 **The first public Node 22 → `iphoneos-arm64` build.** Getting V8 to link with Apple's `ld`, dodging the missing `sys/random.h`, and guarding macOS‑only keychain code are all solved here as a small, readable patch set.
 - ☁️ **You need nothing but a browser.** Every artifact is produced by GitHub Actions — the Node runtime, the JS bundle, and the signed `.deb`. Your low‑disk Windows box never compiles a thing.
 - 🔓 **Rootless‑jailbreak native.** Ships under `/var/jb`, `ldid`‑signed with the `dynamic-codesigning` entitlement, wired up as a `launchd` daemon — the way Procursus/Dopamine packages are meant to work.
 
-## 📟 Target device (probed, not guessed)
+## 📟 Reference device (what it's built & validated against)
 
 | | |
 |---|---|
@@ -37,6 +37,11 @@
 | **Jailbreak** | **Dopamine** (KFD, rootless) · Procursus bootstrap |
 | **Prefix / arch** | `/var/jb` · `iphoneos-arm64` |
 | **RAM** | ~1.9 GB (the real constraint) |
+
+> **Other devices & iOS versions?** Probably, but untested. The `.deb` targets any **rootless
+> `iphoneos-arm64`** jailbreak with a **minimum of iOS 15**, so newer iPhones and other iOS 15+
+> versions on Dopamine/Procursus are *likely* to work — the above is just the one device it's
+> actually been built and validated on. If you try it elsewhere, open an issue with what you find. 🙏
 
 ## 🧩 How it fits together
 
@@ -90,6 +95,11 @@ ssh mobile@<iphone-ip> 'openclaw onboard'        # configure keys + channels
 ```
 
 The daemon starts at boot via `launchd`; logs land in `/var/jb/var/log/openclaw.log`.
+
+> **Heads up on the OpenClaw version.** The bundled OpenClaw may lag behind the latest upstream
+> release — I'll try to keep it reasonably current, but no promises on cadence. You can always build a
+> fresh `.deb` against any published version yourself by running the `openclaw-bundle` workflow with a
+> different `version` input (see below).
 
 ## 🚧 Status
 
