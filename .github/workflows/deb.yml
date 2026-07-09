@@ -14,10 +14,8 @@ on:
       openclaw_version:
         description: "openclaw payload version"
         default: "2026.6.11"
-  push:
-    paths:
-      - ".github/workflows/deb.yml"
-      - "packaging/**"
+  # Dispatch-only: the .deb needs the node-ios release to exist first, so it's built on
+  # demand (and by the release pipeline), not on every push.
 
 permissions:
   contents: write
