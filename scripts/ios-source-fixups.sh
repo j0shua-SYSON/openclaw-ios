@@ -134,33 +134,52 @@ V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size);
 #endif
 #endif''')
 
-# (C) platform-darwin.cc: on iOS the flip is mprotect over the registered range.
-# The stock definition is guarded to NON-iOS; add the iOS one right after it.
+# (C) platform-darwin.cc: on iOS the flip is done via OS::SetPermissions (mprotect
+# under the hood — exactly what the on-device probe validated) over the registered
+# range. The stock definition is guarded to NON-iOS; add the iOS one after its #endif.
 patch("deps/v8/src/base/platform/platform-darwin.cc",
-'''void SetJitWriteProtected(int enable) { pthread_jit_write_protect_np(enable); }
+'''V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
+  pthread_jit_write_protect_np(enable);
+}
+
+#pragma clang diagnostic pop
 #endif''',
-'''void SetJitWriteProtected(int enable) { pthread_jit_write_protect_np(enable); }
+'''V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
+  pthread_jit_write_protect_np(enable);
+}
+
+#pragma clang diagnostic pop
 #endif
 #if V8_HAS_PTHREAD_JIT_WRITE_PROTECT && defined(V8_OS_IOS)
 // Real iOS arm64 (A9/A10) has no APRR; pthread_jit_write_protect_np is a no-op.
-// Flip the whole registered code range RW<->RX with mprotect instead. Nesting is
-// handled by RwxMemoryWriteScope, which calls this only at the outermost level.
-#include <sys/mman.h>
+// Flip the whole registered code range RW<->RX via OS::SetPermissions (mprotect
+// under the hood). Nesting is handled by RwxMemoryWriteScope, which calls this
+// only at the outermost level. Run node --predictable so the process-wide flip
+// has no W^X race with a background compiler thread.
 namespace {
 void* g_jit_base = nullptr;
 size_t g_jit_size = 0;
 }  // namespace
-void RegisterJitRange(void* base, size_t size) {
+V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size) {
   g_jit_base = base;
   g_jit_size = size;
 }
-void SetJitWriteProtected(int enable) {
+V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
   if (g_jit_base != nullptr) {
-    mprotect(g_jit_base, g_jit_size,
-             PROT_READ | (enable ? PROT_EXEC : PROT_WRITE));
+    bool ok = OS::SetPermissions(g_jit_base, g_jit_size,
+                                 enable ? OS::MemoryPermission::kReadExecute
+                                        : OS::MemoryPermission::kReadWrite);
+    (void)ok;
   }
 }
 #endif''')
+
+# (D0) code-range.cc: pull in platform.h so ::v8::base::RegisterJitRange is
+# declared (allocation.h, already included, does not transitively provide it).
+patch("deps/v8/src/heap/code-range.cc",
+'''#include "src/utils/allocation.h"''',
+'''#include "src/utils/allocation.h"
+#include "src/base/platform/platform.h"''')
 
 # (D) code-range.cc: on iOS skip the macOS-only RWX code-range setup (iOS rejects
 # RWX and CHECK_EQ(reserved_area,0) may not hold) and instead register the bounded
