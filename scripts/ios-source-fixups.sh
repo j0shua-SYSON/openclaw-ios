@@ -95,69 +95,95 @@ print("fixup: V8 no longer uses MAP_JIT on iOS (falls back to mprotect W^X)")
 PY
 
 # --- V8: mprotect-based W^X JIT for pre-APRR iOS (A9/A10) ---
-# V8 only implements W^X via APRR (pthread_jit) or PKU; on a real iOS arm64 device it has
-# NEITHER, so RwxMemoryWriteScope::SetWritable/SetExecutable are empty no-ops and V8 leaves
-# code memory RW (iOS drops X) -> JIT SIGBUSes. Implement the empty fallback with mprotect
-# over the code range (registered by code-range.cc). Run node --predictable so codegen is
-# single-threaded (mprotect is process-wide). iOS-only; other "neither" platforms allow RWX.
+# V8 only implements W^X via APRR (pthread_jit) or PKU; a real iOS arm64 device has NEITHER,
+# so RwxMemoryWriteScope::SetWritable/SetExecutable are empty no-ops and V8 leaves code
+# memory RW (iOS drops X) -> JIT SIGBUSes. Implement the fallback with mprotect over the code
+# range (registered by code-range.cc), via a v8::internal::ios_jit namespace (no extern "C",
+# no block-scope linkage specs). Run node --predictable so codegen is single-threaded
+# (mprotect is process-wide). iOS-only; other "neither" platforms allow RWX.
 python3 - <<'PY'
-import io
+def patch(path, anchor, inject):
+    s = open(path).read()
+    if anchor not in s:
+        raise SystemExit("anchor not found in " + path)
+    open(path, "w").write(s.replace(anchor, inject, 1))
 
-# 1) code-memory-access.cc: define the extern-C mprotect toggle + range registration.
-p = "deps/v8/src/common/code-memory-access.cc"
-s = open(p).read(); o = s
-anchor = '#include "src/utils/allocation.h"\n\nnamespace v8 {'
-inject = '''#include "src/utils/allocation.h"
+# 1) code-memory-access.cc: define v8::internal::ios_jit + include mman.
+patch("deps/v8/src/common/code-memory-access.cc",
+'''#include "src/utils/allocation.h"
 
+namespace v8 {
+namespace internal {
+
+ThreadIsolation::TrustedData ThreadIsolation::trusted_data_;''',
+'''#include "src/utils/allocation.h"
 #if defined(V8_OS_IOS)
 #include <sys/mman.h>
-namespace {
-void* g_ios_jit_base = nullptr;
-unsigned long g_ios_jit_size = 0;
-int g_ios_jit_nest = 0;
-}  // namespace
-extern "C" void v8_ios_jit_wx_register_range(void* base, unsigned long size) {
-  g_ios_jit_base = base;
-  g_ios_jit_size = size;
-  mprotect(base, size, PROT_READ | PROT_EXEC);
-}
-extern "C" void v8_ios_jit_wx_set_writable() {
-  if (g_ios_jit_nest++ == 0 && g_ios_jit_base) {
-    mprotect(g_ios_jit_base, g_ios_jit_size, PROT_READ | PROT_WRITE);
-  }
-}
-extern "C" void v8_ios_jit_wx_set_executable() {
-  if (g_ios_jit_nest > 0 && --g_ios_jit_nest == 0 && g_ios_jit_base) {
-    mprotect(g_ios_jit_base, g_ios_jit_size, PROT_READ | PROT_EXEC);
-  }
-}
 #endif
 
-namespace v8 {'''
-s = s.replace(anchor, inject, 1)
-if s == o: raise SystemExit("cma.cc anchor not found")
-open(p, "w").write(s)
+namespace v8 {
+namespace internal {
 
-# 2) code-memory-access-inl.h: wire the empty fallback to the extern-C toggles.
-p = "deps/v8/src/common/code-memory-access-inl.h"
-s = open(p).read(); o = s
-anchor = '''// static
+#if defined(V8_OS_IOS)
+namespace ios_jit {
+namespace {
+void* g_base = nullptr;
+unsigned long g_size = 0;
+int g_nest = 0;
+}  // namespace
+void RegisterRange(void* base, unsigned long size) {
+  g_base = base;
+  g_size = size;
+  ::mprotect(base, size, PROT_READ | PROT_EXEC);
+}
+void SetWritable() {
+  if (g_nest++ == 0 && g_base) ::mprotect(g_base, g_size, PROT_READ | PROT_WRITE);
+}
+void SetExecutable() {
+  if (g_nest > 0 && --g_nest == 0 && g_base)
+    ::mprotect(g_base, g_size, PROT_READ | PROT_EXEC);
+}
+}  // namespace ios_jit
+#endif
+
+ThreadIsolation::TrustedData ThreadIsolation::trusted_data_;''')
+
+# 2) code-memory-access.h: declare the ios_jit helpers (namespace internal).
+patch("deps/v8/src/common/code-memory-access.h",
+'''};
+
+class WritableJitPage;
+class WritableJitAllocation;''',
+'''};
+
+#if defined(V8_OS_IOS)
+namespace ios_jit {
+void SetWritable();
+void SetExecutable();
+void RegisterRange(void* base, unsigned long size);
+}  // namespace ios_jit
+#endif
+
+class WritableJitPage;
+class WritableJitAllocation;''')
+
+# 3) code-memory-access-inl.h: wire the empty fallback to ios_jit.
+patch("deps/v8/src/common/code-memory-access-inl.h",
+'''// static
 bool RwxMemoryWriteScope::IsSupported() { return false; }
 
 // static
 void RwxMemoryWriteScope::SetWritable() {}
 
 // static
-void RwxMemoryWriteScope::SetExecutable() {}'''
-inject = '''#if defined(V8_OS_IOS)
-extern "C" void v8_ios_jit_wx_set_writable();
-extern "C" void v8_ios_jit_wx_set_executable();
+void RwxMemoryWriteScope::SetExecutable() {}''',
+'''#if defined(V8_OS_IOS)
 // static
 bool RwxMemoryWriteScope::IsSupported() { return true; }
 // static
-void RwxMemoryWriteScope::SetWritable() { v8_ios_jit_wx_set_writable(); }
+void RwxMemoryWriteScope::SetWritable() { ios_jit::SetWritable(); }
 // static
-void RwxMemoryWriteScope::SetExecutable() { v8_ios_jit_wx_set_executable(); }
+void RwxMemoryWriteScope::SetExecutable() { ios_jit::SetExecutable(); }
 #else
 // static
 bool RwxMemoryWriteScope::IsSupported() { return false; }
@@ -165,33 +191,23 @@ bool RwxMemoryWriteScope::IsSupported() { return false; }
 void RwxMemoryWriteScope::SetWritable() {}
 // static
 void RwxMemoryWriteScope::SetExecutable() {}
-#endif'''
-s = s.replace(anchor, inject, 1)
-if s == o: raise SystemExit("cma-inl.h anchor not found")
-open(p, "w").write(s)
+#endif''')
 
-# 3) code-range.cc: register the code range base/size for toggling.
-p = "deps/v8/src/heap/code-range.cc"
-s = open(p).read(); o = s
-anchor = '''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
+# 4) code-range.cc: register the code range for toggling.
+patch("deps/v8/src/heap/code-range.cc",
+'''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
   }
   return true;
-}'''
-inject = '''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
+}''',
+'''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
   }
 #if defined(V8_OS_IOS)
-  {
-    extern "C" void v8_ios_jit_wx_register_range(void*, unsigned long);
-    v8_ios_jit_wx_register_range(reinterpret_cast<void*>(base()), size());
-  }
+  ios_jit::RegisterRange(reinterpret_cast<void*>(base()), size());
 #endif
   return true;
-}'''
-s = s.replace(anchor, inject, 1)
-if s == o: raise SystemExit("code-range.cc anchor not found")
-open(p, "w").write(s)
+}''')
 
-print("fixup: V8 mprotect W^X JIT patch applied (3 files)")
+print("fixup: V8 mprotect W^X JIT patch applied (4 files, namespaced)")
 PY
 
 # --- c-ares ---
