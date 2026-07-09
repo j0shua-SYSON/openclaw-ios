@@ -44,6 +44,33 @@ open(f, "w").write(s)
 print("fixup: crypto_context.cc macOS keychain code guarded with TARGET_OS_OSX")
 PY
 
+# --- link Darwin frameworks on iOS ---
+# Frameworks are normally declared via xcode_settings.OTHER_LDFLAGS, which the gyp *make*
+# generator only applies for flavor=="mac" — so flavor=="ios" links nothing. Abseil's tz
+# lookup (via V8) needs CoreFoundation (_CFRelease/_CFTimeZone* etc.), and other deps want
+# CoreServices/Security. Inject them as plain link_settings.libraries in target_defaults
+# (honored by any flavor, applied to every linked target). All exist on the iOS SDK.
+python3 - "common.gypi" <<'PY'
+import sys
+f = sys.argv[1]
+s = open(f).read()
+anchor = "['OS==\"mac\"', {\n        'defines': ['_DARWIN_USE_64_BIT_INODE=1'],"
+inject = ("['OS==\"ios\"', {\n"
+          "        'link_settings': { 'libraries': [\n"
+          "          '-framework CoreFoundation',\n"
+          "          '-framework CoreServices',\n"
+          "          '-framework Security',\n"
+          "        ] },\n"
+          "      }],\n"
+          "      ") + anchor
+if anchor not in s:
+    raise SystemExit("common.gypi anchor not found — Node layout changed?")
+if "OS==\"ios\"" not in s:
+    s = s.replace(anchor, inject, 1)
+open(f, "w").write(s)
+print("fixup: common.gypi links CoreFoundation/CoreServices/Security on iOS")
+PY
+
 # --- c-ares ---
 # Node's cares.gyp uses config/darwin for both mac and ios, but the iOS SDK does NOT
 # ship <sys/random.h> (it has arc4random_buf instead). Undef the header macro so
