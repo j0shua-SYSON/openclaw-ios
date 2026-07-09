@@ -17,6 +17,12 @@ case "$1" in
       chmod 0600 "$CFG" 2>/dev/null || true
     fi
 
+    # Root git needs safe.directory to avoid "dubious ownership" aborts (e.g. self-update).
+    GITCFG="$PREFIX/var/lib/openclaw/.gitconfig"
+    if [ ! -f "$GITCFG" ]; then
+      printf '[safe]\n\tdirectory = *\n' > "$GITCFG"
+    fi
+
     chmod 0755 "$NODE" "$APP/run-gateway.sh" "$PREFIX/usr/bin/openclaw" 2>/dev/null || true
     chown root:wheel "$PLIST" 2>/dev/null || true
     chmod 0644 "$PLIST" 2>/dev/null || true
