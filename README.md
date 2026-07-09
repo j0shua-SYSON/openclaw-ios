@@ -96,10 +96,15 @@ ssh mobile@<iphone-ip> 'openclaw onboard'        # configure keys + channels
 
 The daemon starts at boot via `launchd`; logs land in `/var/jb/var/log/openclaw.log`.
 
-> **Heads up on the OpenClaw version.** The bundled OpenClaw may lag behind the latest upstream
-> release — I'll try to keep it reasonably current, but no promises on cadence. You can always build a
-> fresh `.deb` against any published version yourself by running the `openclaw-bundle` workflow with a
-> different `version` input (see below).
+> **Heads up on the OpenClaw version.** OpenClaw ships *fast*, so the bundled version may lag upstream —
+> I'll try to keep it current. The good news: the tricky patches here are to **Node's own build**, not to
+> OpenClaw (which is installed unmodified from npm), so they **don't rot** when OpenClaw updates. Bumping
+> the `openclaw-bundle` `version` input to a newer release works **as long as that release still targets
+> Node 22.x and stays pure‑JS** — the datastore is the built‑in `node:sqlite`, so there are normally no
+> native addons to worry about. What *would* need more than a version bump: a release that raises the Node
+> floor (e.g. to 24 → rebuild Node with the same patch set) or adds a **boot‑critical native module**
+> (→ cross‑compile it) or renames the CLI/`OPENCLAW_*` env surface (→ tweak the wrappers). The repo pins a
+> **validated** version; newer is *usually* fine, not guaranteed.
 
 ## 🚧 Status
 
