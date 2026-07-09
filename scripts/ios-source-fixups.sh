@@ -6,31 +6,23 @@ set -eux
 SRC="${1:?usage: ios-source-fixups.sh <node-src-dir>}"
 cd "$SRC"
 
-# --- gyp make generator: treat iOS as a Darwin/Mach-O platform ---
-# Node's gyp make generator only emits Mach-O link commands (and frameworks,
-# install_name, -arch, .dylib, objc) for flavor=="mac"; flavor=="ios" falls through to
-# the Linux template, which uses `ld --start-group/--end-group` — flags Apple's ld
-# rejects ("ld: unknown options: --start-group --end-group"). Make the *generator* treat
-# ios like mac, but keep the gyp OS variable = "ios" so V8's iOS codegen and OS=="ios"
-# gyp conditions remain correct.
+# --- gyp make generator: drop GNU --start-group/--end-group ---
+# For flavor=="ios" the make generator uses the Linux link template, which wraps the
+# static libs in `-Wl,--start-group ... -Wl,--end-group`. Apple's ld64 (used for BOTH the
+# macOS host tools and the iOS target on the runner) rejects those flags AND doesn't need
+# them — it resolves archives with a global view, so circular deps are fine without a
+# group. Strip them from every link template. This is far less invasive than remapping the
+# flavor (which shifts obj.host lib paths and breaks the js2c host link).
 python3 - "tools/gyp/pylib/gyp/generator/make.py" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
 orig = s
-# CalculateVariables: give ios the mac branch, but OS stays "ios" (not "mac").
-s = s.replace(
-    'default_variables.setdefault("OS", "mac")',
-    'default_variables.setdefault("OS", "ios" if flavor == "ios" else "mac")',
-)
-# All the per-target mac behaviors (frameworks, install_name, -arch, bundles...).
-s = s.replace('self.flavor == "mac"', 'self.flavor in ("mac", "ios")')
-# Module-level flavor checks: CalculateVariables branch + LINK_COMMANDS_MAC selection.
-s = s.replace('if flavor == "mac":', 'if flavor in ("mac", "ios"):')
+s = s.replace(" -Wl,--start-group", "").replace(" -Wl,--end-group", "")
 if s == orig:
-    raise SystemExit("make.py fixup matched nothing — Node layout changed?")
+    raise SystemExit("make.py --start-group strip matched nothing — Node layout changed?")
 open(p, "w").write(s)
-print("fixup: gyp make.py now treats flavor 'ios' as Mach-O/mac (OS stays ios)")
+print("fixup: stripped -Wl,--start-group/--end-group from gyp make link templates")
 PY
 
 # --- c-ares ---
