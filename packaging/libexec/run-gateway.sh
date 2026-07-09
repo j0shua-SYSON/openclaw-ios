@@ -10,11 +10,11 @@ export OPENCLAW_NO_RESPAWN=1
 export UV_THREADPOOL_SIZE=2
 export PATH="$PREFIX/usr/bin:$PREFIX/bin:$PREFIX/usr/sbin:$PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# Put the memory caps in NODE_OPTIONS so any child node process OpenClaw spawns
+# (workers, or a self-respawn) also stays bounded on a ~2 GB device.
+export NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning"
+
 mkdir -p "$HOME" 2>/dev/null || true
 cd "$HOME" 2>/dev/null || true
 
-exec "$APP/node" \
-  --max-old-space-size=512 \
-  --max-semi-space-size=16 \
-  --disable-warning=ExperimentalWarning \
-  "$APP/node_modules/openclaw/openclaw.mjs" gateway --port 18789
+exec "$APP/node" "$APP/node_modules/openclaw/openclaw.mjs" gateway --port 18789
