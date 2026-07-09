@@ -71,6 +71,29 @@ open(f, "w").write(s)
 print("fixup: common.gypi links CoreFoundation/CoreServices/Security on iOS")
 PY
 
+# --- V8: don't use MAP_JIT on iOS (enables real JIT on the A9) ---
+# V8 is internally inconsistent about iOS: platform-darwin.cc skips the
+# pthread_jit_write_protect_np toggle on iOS (`&& !defined(V8_OS_IOS)`), but
+# platform-posix.cc still requests MAP_JIT pages for all Darwin. So on iOS V8 gets a
+# MAP_JIT region and never performs the write-protect flip that makes it executable ->
+# executing JITed code SIGBUSes (fatal on the A9, which has no APRR). Excluding iOS from
+# MAP_JIT makes V8 fall back to plain PROT_NONE + mprotect(RW->RX), which the runtime probe
+# proved works on jailbroken iOS 15 with the dynamic-codesigning entitlement.
+python3 - "deps/v8/src/base/platform/platform-posix.cc" <<'PY'
+import sys
+f = sys.argv[1]
+s = open(f).read()
+orig = s
+s = s.replace(
+    "#if V8_OS_DARWIN\n  // MAP_JIT is required to obtain writable and executable pages when the",
+    "#if V8_OS_DARWIN && !defined(V8_OS_IOS)\n  // MAP_JIT is required to obtain writable and executable pages when the",
+)
+if s == orig:
+    raise SystemExit("V8 MAP_JIT fixup matched nothing — V8 layout changed?")
+open(f, "w").write(s)
+print("fixup: V8 no longer uses MAP_JIT on iOS (falls back to mprotect W^X)")
+PY
+
 # --- c-ares ---
 # Node's cares.gyp uses config/darwin for both mac and ios, but the iOS SDK does NOT
 # ship <sys/random.h> (it has arc4random_buf instead). Undef the header macro so
