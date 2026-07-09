@@ -5,6 +5,7 @@ Architecture: iphoneos-arm64
 Maintainer: j0shua-SYSON <j0shua-SYSON@users.noreply.github.com>
 Author: OpenClaw
 Section: System
+Depends: ripgrep, fd
 Description: OpenClaw personal AI assistant gateway, native on-device.
  Ships a cross-compiled Node.js runtime plus the OpenClaw gateway and runs it as a
  launchd daemon. Configure with `openclaw onboard` over SSH after install.

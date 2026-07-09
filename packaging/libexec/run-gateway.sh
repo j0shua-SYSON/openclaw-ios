@@ -9,6 +9,8 @@ export OPENCLAW_STATE_DIR="$HOME"
 export OPENCLAW_NO_RESPAWN=1
 # iOS has no scutil/dns-sd; skip Bonjour/mDNS to avoid failed spawns + ~5s boot latency.
 export OPENCLAW_DISABLE_BONJOUR=1
+# Point the agent's exec/bash tools at the real on-device bash (rootless path).
+export SHELL="${SHELL:-$PREFIX/usr/bin/bash}"
 export UV_THREADPOOL_SIZE=2
 export PATH="$PREFIX/usr/bin:$PREFIX/bin:$PREFIX/usr/sbin:$PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
