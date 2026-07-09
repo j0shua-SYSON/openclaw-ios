@@ -4,7 +4,7 @@
 
 ### A full Node.js AI‑assistant gateway, running **natively on jailbroken iOS**
 
-*Cross‑compiled in the cloud, installed as a rootless Sileo `.deb`. No Mac, no Xcode, no App Store.*
+*A private, always‑on AI assistant that lives entirely on your own iPhone — yours to own, not rented from the cloud.*
 
 <!-- badges -->
 [![node-ios build](https://github.com/j0shua-SYSON/openclaw-ios/actions/workflows/node-ios.yml/badge.svg)](https://github.com/j0shua-SYSON/openclaw-ios/actions/workflows/node-ios.yml)
