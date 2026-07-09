@@ -84,6 +84,23 @@ And the runtime model was validated on‑device first (see [`spikes/runtime-prob
 an `ldid`‑signed binary runs directly under Dopamine (auto‑trust‑cached), `fork()` works, and **JIT works
 via classic `mprotect` W^X** — because the A9 has no APRR, V8's usual `MAP_JIT` path is dead.
 
+## ✅ Requirements (on the device)
+
+The `.deb` **bundles its own Node.js runtime and every JavaScript/WASM dependency**, so there's very
+little to install alongside it — no Node, no npm, no toolchain on the phone.
+
+| Need | Notes |
+|---|---|
+| **A rootless jailbreak** | Dopamine (or any Procursus‑based rootless JB) on **iOS 15+**, `arm64`. Provides `/var/jb`, `launchctl`, and the trust mechanism that lets the signed binary run. |
+| **An installer** | **Sileo** (or Zebra/`dpkg`) to install the `.deb`. `dpkg` + APT ship with the bootstrap. |
+| **A shell (to configure)** | **OpenSSH** or an on‑device terminal (e.g. NewTerm) to run `openclaw onboard` once. Optional but you'll want it. |
+| **~1 GB free space** | The bundled runtime + OpenClaw tree. Disk is rarely the constraint; **RAM (~2 GB)** is. |
+| **API keys** | Whatever provider/channel you point OpenClaw at (an OpenClaw config step, not a device package). |
+
+There is intentionally **no APT `Depends:`** on extra packages — everything the gateway needs is inside
+the package or already part of the jailbreak base. `ldid` is used opportunistically in `postinst` to
+re‑sign, but the binary is already signed at build time, so it's not required.
+
 ## 📦 Install (once a `.deb` is published)
 
 ```bash
