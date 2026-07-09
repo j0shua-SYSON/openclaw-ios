@@ -142,6 +142,9 @@ open(p, "w").write(s)
 p = "deps/v8/src/common/code-memory-access-inl.h"
 s = open(p).read(); o = s
 anchor = '''// static
+bool RwxMemoryWriteScope::IsSupported() { return false; }
+
+// static
 void RwxMemoryWriteScope::SetWritable() {}
 
 // static
@@ -150,10 +153,14 @@ inject = '''#if defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64)
 extern "C" void v8_ios_jit_wx_set_writable();
 extern "C" void v8_ios_jit_wx_set_executable();
 // static
+bool RwxMemoryWriteScope::IsSupported() { return true; }
+// static
 void RwxMemoryWriteScope::SetWritable() { v8_ios_jit_wx_set_writable(); }
 // static
 void RwxMemoryWriteScope::SetExecutable() { v8_ios_jit_wx_set_executable(); }
 #else
+// static
+bool RwxMemoryWriteScope::IsSupported() { return false; }
 // static
 void RwxMemoryWriteScope::SetWritable() {}
 // static
