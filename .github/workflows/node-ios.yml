@@ -124,10 +124,19 @@ jobs:
       - name: Build
         working-directory: node-src
         run: |
-          set -euxo pipefail
+          set -uxo pipefail
           export CCACHE_DIR="$HOME/.ccache"
-          make -j"$(sysctl -n hw.ncpu)" 2>&1 | tail -n 4000
+          # Capture full log so the real error isn't lost to tail truncation under make -j.
+          if ! make -j"$(sysctl -n hw.ncpu)" > build.log 2>&1; then
+            echo "=== BUILD FAILED — error lines ==="
+            grep -nE "error:|fatal error|Error [0-9]|\*\*\* |ld: |Undefined symbols|clang: error" build.log \
+              | grep -viE "no newline|Wnewline-eof|#warning|gethostuuid|_GLIBCXX" | tail -60
+            echo "=== last 80 lines of build.log ==="
+            tail -80 build.log
+            exit 1
+          fi
           echo "=== build done ==="
+          ls -la out/Release/node
 
       - name: Verify + sign
         working-directory: node-src
