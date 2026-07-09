@@ -71,14 +71,10 @@ open(f, "w").write(s)
 print("fixup: common.gypi links CoreFoundation/CoreServices/Security on iOS")
 PY
 
-# --- V8: don't use MAP_JIT on iOS (enables real JIT on the A9) ---
-# V8 is internally inconsistent about iOS: platform-darwin.cc skips the
-# pthread_jit_write_protect_np toggle on iOS (`&& !defined(V8_OS_IOS)`), but
-# platform-posix.cc still requests MAP_JIT pages for all Darwin. So on iOS V8 gets a
-# MAP_JIT region and never performs the write-protect flip that makes it executable ->
-# executing JITed code SIGBUSes (fatal on the A9, which has no APRR). Excluding iOS from
-# MAP_JIT makes V8 fall back to plain PROT_NONE + mprotect(RW->RX), which the runtime probe
-# proved works on jailbroken iOS 15 with the dynamic-codesigning entitlement.
+# --- V8: don't use MAP_JIT on iOS ---
+# platform-posix.cc requests MAP_JIT pages for all Darwin. On the A9 MAP_JIT returns EINVAL
+# (it's an A11+/APRR feature), so we exclude iOS and let V8 fall back to plain anonymous
+# pages that our mprotect W^X mechanism (below) can flip. iOS-only.
 python3 - "deps/v8/src/base/platform/platform-posix.cc" <<'PY'
 import sys
 f = sys.argv[1]
@@ -91,109 +87,91 @@ s = s.replace(
 if s == orig:
     raise SystemExit("V8 MAP_JIT fixup matched nothing — V8 layout changed?")
 open(f, "w").write(s)
-print("fixup: V8 no longer uses MAP_JIT on iOS (falls back to mprotect W^X)")
+print("fixup: V8 no longer uses MAP_JIT on iOS (falls back to plain pages + mprotect W^X)")
 PY
 
-# --- V8: mprotect-based W^X JIT for pre-APRR iOS (A9/A10) ---
-# V8 only implements W^X via APRR (pthread_jit) or PKU; a real iOS arm64 device has NEITHER,
-# so RwxMemoryWriteScope::SetWritable/SetExecutable are empty no-ops and V8 leaves code
-# memory RW (iOS drops X) -> JIT SIGBUSes. Implement the fallback with mprotect over the code
-# range (registered by code-range.cc), via a v8::internal::ios_jit namespace (no extern "C",
-# no block-scope linkage specs). Run node --predictable so codegen is single-threaded
-# (mprotect is process-wide). iOS-only; other "neither" platforms allow RWX.
+# --- V8: full JIT on pre-APRR iOS (A9/A10) via mprotect W^X ---
+# V8 only WRAPS its code-space writes (allocation, free-list, GC, patching) in
+# "make-writable-first" scopes when V8_HAS_PTHREAD_JIT_WRITE_PROTECT is set — which
+# build_config.h hard-codes OFF for real iOS devices (on only for macOS + iOS simulator).
+# With it off, V8 assumes code memory is permanently RWX and writes unguarded; those writes
+# then fault the instant a page is RX (observed on-device: EXC_BAD_ACCESS code=2, a WRITE
+# fault, in FreeListManyCachedFastPathBase::Allocate during Sparkplug code allocation).
+# Fix, 4 files:
+#   (A) turn the macro ON for iOS device too -> activates ALL of V8's write wrapping
+#       (the machinery is already correct for APRR Macs; it was just switched off).
+#   (B/C) reroute the actual flip primitive from pthread_jit_write_protect_np (a no-op on
+#       the A9) to mprotect over the registered code range.
+#   (D) register that bounded code region, and skip the macOS-only RWX code-range setup on
+#       iOS (iOS rejects RWX; committed code pages start RW).
+# Run node --predictable so the process-wide mprotect flip has no W^X race with a
+# background compiler thread.
 python3 - <<'PY'
 def patch(path, anchor, inject):
     s = open(path).read()
     if anchor not in s:
-        raise SystemExit("anchor not found in " + path)
+        raise SystemExit("anchor NOT found in " + path + " :: " + repr(anchor[:70]))
     open(path, "w").write(s.replace(anchor, inject, 1))
 
-# 1) code-memory-access.cc: define v8::internal::ios_jit + include mman.
-patch("deps/v8/src/common/code-memory-access.cc",
-'''#include "src/utils/allocation.h"
+# (A) build_config.h: enable the pthread-JIT-write-protect macro on iOS device too.
+patch("deps/v8/src/base/build_config.h",
+'''#if defined(V8_HOST_ARCH_ARM64) && \\
+    (defined(V8_OS_MACOS) || (defined(V8_OS_IOS) && TARGET_OS_SIMULATOR))
+#define V8_HAS_PTHREAD_JIT_WRITE_PROTECT 1''',
+'''#if defined(V8_HOST_ARCH_ARM64) && \\
+    (defined(V8_OS_MACOS) || defined(V8_OS_IOS))
+#define V8_HAS_PTHREAD_JIT_WRITE_PROTECT 1''')
 
-namespace v8 {
-namespace internal {
-
-ThreadIsolation::TrustedData ThreadIsolation::trusted_data_;''',
-'''#include "src/utils/allocation.h"
+# (B) platform.h: declare RegisterJitRange alongside SetJitWriteProtected.
+patch("deps/v8/src/base/platform/platform.h",
+'''#if V8_HAS_PTHREAD_JIT_WRITE_PROTECT
+V8_BASE_EXPORT void SetJitWriteProtected(int enable);
+#endif''',
+'''#if V8_HAS_PTHREAD_JIT_WRITE_PROTECT
+V8_BASE_EXPORT void SetJitWriteProtected(int enable);
 #if defined(V8_OS_IOS)
-#include <sys/mman.h>
+V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size);
 #endif
-
-namespace v8 {
-namespace internal {
-
-#if defined(V8_OS_IOS)
-namespace ios_jit {
-namespace {
-void* g_base = nullptr;
-unsigned long g_size = 0;
-int g_nest = 0;
-}  // namespace
-void RegisterRange(void* base, unsigned long size) {
-  g_base = base;
-  g_size = size;
-  ::mprotect(base, size, PROT_READ | PROT_EXEC);
-}
-void SetWritable() {
-  if (g_nest++ == 0 && g_base) ::mprotect(g_base, g_size, PROT_READ | PROT_WRITE);
-}
-void SetExecutable() {
-  if (g_nest > 0 && --g_nest == 0 && g_base)
-    ::mprotect(g_base, g_size, PROT_READ | PROT_EXEC);
-}
-}  // namespace ios_jit
-#endif
-
-ThreadIsolation::TrustedData ThreadIsolation::trusted_data_;''')
-
-# 2) code-memory-access.h: declare the ios_jit helpers (namespace internal).
-patch("deps/v8/src/common/code-memory-access.h",
-'''};
-
-class WritableJitPage;
-class WritableJitAllocation;''',
-'''};
-
-#if defined(V8_OS_IOS)
-namespace ios_jit {
-void SetWritable();
-void SetExecutable();
-void RegisterRange(void* base, unsigned long size);
-}  // namespace ios_jit
-#endif
-
-class WritableJitPage;
-class WritableJitAllocation;''')
-
-# 3) code-memory-access-inl.h: wire the empty fallback to ios_jit.
-patch("deps/v8/src/common/code-memory-access-inl.h",
-'''// static
-bool RwxMemoryWriteScope::IsSupported() { return false; }
-
-// static
-void RwxMemoryWriteScope::SetWritable() {}
-
-// static
-void RwxMemoryWriteScope::SetExecutable() {}''',
-'''#if defined(V8_OS_IOS)
-// static
-bool RwxMemoryWriteScope::IsSupported() { return true; }
-// static
-void RwxMemoryWriteScope::SetWritable() { ios_jit::SetWritable(); }
-// static
-void RwxMemoryWriteScope::SetExecutable() { ios_jit::SetExecutable(); }
-#else
-// static
-bool RwxMemoryWriteScope::IsSupported() { return false; }
-// static
-void RwxMemoryWriteScope::SetWritable() {}
-// static
-void RwxMemoryWriteScope::SetExecutable() {}
 #endif''')
 
-# 4) code-range.cc: register the code range for toggling.
+# (C) platform-darwin.cc: on iOS the flip is mprotect over the registered range.
+# The stock definition is guarded to NON-iOS; add the iOS one right after it.
+patch("deps/v8/src/base/platform/platform-darwin.cc",
+'''void SetJitWriteProtected(int enable) { pthread_jit_write_protect_np(enable); }
+#endif''',
+'''void SetJitWriteProtected(int enable) { pthread_jit_write_protect_np(enable); }
+#endif
+#if V8_HAS_PTHREAD_JIT_WRITE_PROTECT && defined(V8_OS_IOS)
+// Real iOS arm64 (A9/A10) has no APRR; pthread_jit_write_protect_np is a no-op.
+// Flip the whole registered code range RW<->RX with mprotect instead. Nesting is
+// handled by RwxMemoryWriteScope, which calls this only at the outermost level.
+#include <sys/mman.h>
+namespace {
+void* g_jit_base = nullptr;
+size_t g_jit_size = 0;
+}  // namespace
+void RegisterJitRange(void* base, size_t size) {
+  g_jit_base = base;
+  g_jit_size = size;
+}
+void SetJitWriteProtected(int enable) {
+  if (g_jit_base != nullptr) {
+    mprotect(g_jit_base, g_jit_size,
+             PROT_READ | (enable ? PROT_EXEC : PROT_WRITE));
+  }
+}
+#endif''')
+
+# (D) code-range.cc: on iOS skip the macOS-only RWX code-range setup (iOS rejects
+# RWX and CHECK_EQ(reserved_area,0) may not hold) and instead register the bounded
+# code region for the mprotect flip. Committed code pages start RW.
+patch("deps/v8/src/heap/code-range.cc",
+'''  if (V8_HEAP_USE_PTHREAD_JIT_WRITE_PROTECT &&
+      params.jit == JitPermission::kMapAsJittable) {''',
+'''#if !defined(V8_OS_IOS)
+  if (V8_HEAP_USE_PTHREAD_JIT_WRITE_PROTECT &&
+      params.jit == JitPermission::kMapAsJittable) {''')
+
 patch("deps/v8/src/heap/code-range.cc",
 '''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
   }
@@ -201,13 +179,15 @@ patch("deps/v8/src/heap/code-range.cc",
 }''',
 '''    if (!params.page_allocator->DiscardSystemPages(base, size)) return false;
   }
-#if defined(V8_OS_IOS)
-  ios_jit::RegisterRange(reinterpret_cast<void*>(base()), size());
+#else
+  ::v8::base::RegisterJitRange(
+      reinterpret_cast<void*>(page_allocator_->begin()),
+      page_allocator_->size());
 #endif
   return true;
 }''')
 
-print("fixup: V8 mprotect W^X JIT patch applied (4 files, namespaced)")
+print("fixup: iOS full-JIT via mprotect W^X (pthread macro ON + flip rerouted; build_config/platform.h/platform-darwin/code-range)")
 PY
 
 # --- c-ares ---
