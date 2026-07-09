@@ -57,7 +57,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-node-ios-${{ env.NODE_REF }}-${{ hashFiles('patches/node-ios/**') }}
+          # Rolling key: each run saves a fresh cache (accumulating the full V8 compile) and
+          # restores from the most recent one. A constant key would save only the first
+          # (partial) compile and never update, so every run stayed cold.
+          key: ccache-node-ios-${{ env.NODE_REF }}-${{ github.run_id }}
           restore-keys: |
             ccache-node-ios-${{ env.NODE_REF }}-
             ccache-node-ios-
@@ -126,13 +129,18 @@ jobs:
         run: |
           set -uxo pipefail
           export CCACHE_DIR="$HOME/.ccache"
-          # Capture full log so the real error isn't lost to tail truncation under make -j.
-          if ! make -j"$(sysctl -n hw.ncpu)" > build.log 2>&1; then
+          echo "cores: ncpu=$(sysctl -n hw.ncpu) logical=$(sysctl -n hw.logicalcpu)"
+          ccache -z >/dev/null 2>&1 || true
+          # tee: stream progress live to the Actions log AND keep the full log for error extraction.
+          set +e
+          make -j"$(sysctl -n hw.logicalcpu)" 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "=== ccache stats ==="; ccache -s 2>/dev/null | head -20 || true
+          if [ "$rc" -ne 0 ]; then
             echo "=== BUILD FAILED — error lines ==="
             grep -nE "error:|fatal error|Error [0-9]|\*\*\* |ld: |Undefined symbols|clang: error" build.log \
               | grep -viE "no newline|Wnewline-eof|#warning|gethostuuid|_GLIBCXX" | tail -60
-            echo "=== last 80 lines of build.log ==="
-            tail -80 build.log
             exit 1
           fi
           echo "=== build done ==="
