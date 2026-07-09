@@ -58,6 +58,8 @@ jobs:
           # wrappers + daemon
           cp packaging/bin/openclaw "$PKG/var/jb/usr/bin/openclaw"
           cp packaging/libexec/run-gateway.sh "$APP/run-gateway.sh"
+          # Expose `node` on PATH (no system node on-device) for any tool/skill that calls it.
+          ln -sf ../libexec/openclaw/node "$PKG/var/jb/usr/bin/node"
           cp packaging/ai.openclaw.gateway.plist "$PKG/var/jb/Library/LaunchDaemons/ai.openclaw.gateway.plist"
 
           # control + maintainer scripts
