@@ -1,0 +1,160 @@
+name: node-drumbrake-arm64
+
+# Cross-compile a JITLESS Node.js 24 for jailbroken iOS 15 arm64 (Dopamine / A9) with
+# DrumBrake, V8's WebAssembly interpreter, hand-wired into the GYP build.
+#
+# The A9 has no APRR/PKU -> JIT is single-threaded-only (process-global W^X), but OpenClaw
+# uses worker_threads, so the gateway MUST run jitless. Jitless disables WASM, and undici/
+# fetch's llhttp IS WASM -> we need a WASM interpreter = DrumBrake. Run: node --jitless
+# --wasm-jitless. This build is separate from the JIT build (node-ios.yml) which stays for
+# single-threaded use.
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_ref:
+        description: "Node git tag to build (needs DrumBrake in V8; v24.18.0+)"
+        default: "v24.18.0"
+  push:
+    paths:
+      - ".github/workflows/node-drumbrake.yml"
+      - "scripts/ios-source-fixups-drumbrake.sh"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14 # arm64 host == arm64 target (host==target lets the arm64 interpreter builtin serve both toolsets)
+    timeout-minutes: 120
+    env:
+      NODE_REF: ${{ github.event.inputs.node_ref || 'v24.18.0' }}
+      IOS_MIN: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin Python 3.12 (Node configure rejects 3.14)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Toolchain + SDK info
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos --show-sdk-version
+          clang --version
+          sysctl -n hw.ncpu
+          brew list ldid >/dev/null 2>&1 || brew install ldid
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-drumbrake-${{ env.NODE_REF }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-drumbrake-${{ env.NODE_REF }}-
+            ccache-drumbrake-
+
+      - name: Clone Node ${{ env.NODE_REF }}
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$NODE_REF" https://github.com/nodejs/node.git node-src
+          cat node-src/src/node_version.h | grep -E "NODE_(MAJOR|MINOR|PATCH)" | head -3
+
+      - name: iOS source fixups + DrumBrake wiring
+        run: bash scripts/ios-source-fixups-drumbrake.sh node-src
+
+      - name: Configure (iphoneos-arm64, min iOS ${{ env.IOS_MIN }})
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          export IPHONEOS_DEPLOYMENT_TARGET="$IOS_MIN"
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_MAXSIZE=3G
+          export CC="ccache clang -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          export CXX="ccache clang++ -std=gnu++20 -arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          export CC_host="ccache clang"
+          export CXX_host="ccache clang++ -std=gnu++20"
+          export LDFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$IOS_MIN"
+          # v8_enable_drumbrake=1 turns on the feature var (features.gypi patch emits the defines
+          # on BOTH host mksnapshot and target libv8 so the builtin set matches).
+          export GYP_DEFINES="v8_enable_drumbrake=1 target_arch=arm64 host_arch=arm64 host_os=mac target_os=ios"
+
+          python3 configure \
+            --dest-os=ios \
+            --dest-cpu=arm64 \
+            --cross-compiling \
+            --with-intl=small-icu \
+            --without-npm \
+            --without-node-snapshot \
+            --without-node-code-cache \
+            --without-inspector \
+            --openssl-no-asm
+          echo "=== configure done ==="
+
+      - name: Build
+        working-directory: node-src
+        run: |
+          set -uxo pipefail
+          export CCACHE_DIR="$HOME/.ccache"
+          echo "cores: ncpu=$(sysctl -n hw.ncpu)"
+          ccache -z >/dev/null 2>&1 || true
+          set +e
+          make -j2 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          echo "make rc=$rc"
+          set -e
+          echo "=== ccache stats ==="; ccache -s 2>/dev/null | head -20 || true
+          if [ "$rc" -ne 0 ]; then
+            echo "=== BUILD FAILED — error lines ==="
+            grep -nE "error:|fatal error|Error [0-9]|\*\*\* |ld: |Undefined symbols|clang: error" build.log \
+              | grep -viE "no newline|Wnewline-eof|#warning|gethostuuid|_GLIBCXX" | tail -60
+            exit 1
+          fi
+          echo "=== build done ==="
+          ls -la out/Release/node
+
+      - name: Verify DrumBrake + defines + sign
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          file out/Release/node
+          # (a) DrumBrake symbols actually linked in (the CI-visible half of go/no-go)
+          if otool -tvV out/Release/node 2>/dev/null | grep -qi "WasmInterpreter"; then
+            echo "OK: DrumBrake (WasmInterpreter) symbols present"
+          else
+            echo "FAIL: no DrumBrake symbols — define/sources not wired into V8"; exit 1
+          fi
+          # (b) the load-bearing defines reached the compile (pointer compression is a hard dep)
+          echo "=== defines in build.log ==="
+          for d in V8_ENABLE_DRUMBRAKE V8_DRUMBRAKE_BOUNDS_CHECKS V8_COMPRESS_POINTERS; do
+            if grep -q -- "-D$d" build.log || grep -q -- "$d" build.log; then echo "  present: $d"; else echo "  MISSING: $d"; fi
+          done
+          cat > ent.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>platform-application</key><true/>
+            <key>com.apple.private.security.no-container</key><true/>
+            <key>dynamic-codesigning</key><true/>
+            <key>get-task-allow</key><true/>
+          </dict></plist>
+          EOF
+          ldid -Sent.plist out/Release/node
+          echo "size: $(du -h out/Release/node | cut -f1)"
+
+      - name: Publish node binary to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: node-src
+        run: |
+          set -euxo pipefail
+          cp out/Release/node "node-${NODE_REF}-iphoneos-arm64"
+          gh release view node-ios -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create node-ios -R "$GITHUB_REPOSITORY" \
+                 --title "Node for iOS arm64" --notes "Cross-compiled Node for jailbroken iOS 15 arm64" --prerelease
+          gh release upload node-ios "node-${NODE_REF}-iphoneos-arm64" --clobber -R "$GITHUB_REPOSITORY"
