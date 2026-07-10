@@ -132,10 +132,9 @@ jobs:
           echo "cores: ncpu=$(sysctl -n hw.ncpu) logical=$(sysctl -n hw.logicalcpu)"
           ccache -z >/dev/null 2>&1 || true
           # tee: stream progress live to the Actions log AND keep the full log for error extraction.
-          # -j2 (not logicalcpu=3): the V8 W^X patch changes build_config.h (included across
-          # all of V8), so every V8 TU is a cold cache miss. 3 concurrent cold -O3 V8 compiles
-          # OOM-kill the 3-core/7GB macOS runner (silent kill: no clang error, no make ***).
-          # -j2 keeps peak memory under the ceiling. Slower but survives.
+          # Keep the patched V8 build conservative on the 3-core/7GB macOS runner while
+          # its full-JIT path is being validated; the prior early failures were compile
+          # errors, not confirmed OOM kills.
           set +e
           make -j2 2>&1 | tee build.log
           rc=${PIPESTATUS[0]}

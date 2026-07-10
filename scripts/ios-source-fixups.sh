@@ -134,9 +134,9 @@ V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size);
 #endif
 #endif''')
 
-# (C) platform-darwin.cc: on iOS the flip is done via OS::SetPermissions (mprotect
-# under the hood — exactly what the on-device probe validated) over the registered
-# range. The stock definition is guarded to NON-iOS; add the iOS one after its #endif.
+# (C) platform-darwin.cc: on iOS the flip is done directly with mprotect (exactly
+# what the on-device probe validated) over the registered range. The stock definition
+# is guarded to NON-iOS; add the iOS one after its #endif.
 patch("deps/v8/src/base/platform/platform-darwin.cc",
 '''V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
   pthread_jit_write_protect_np(enable);
@@ -152,10 +152,10 @@ patch("deps/v8/src/base/platform/platform-darwin.cc",
 #endif
 #if V8_HAS_PTHREAD_JIT_WRITE_PROTECT && defined(V8_OS_IOS)
 // Real iOS arm64 (A9/A10) has no APRR; pthread_jit_write_protect_np is a no-op.
-// Flip the whole registered code range RW<->RX via OS::SetPermissions (mprotect
-// under the hood). Nesting is handled by RwxMemoryWriteScope, which calls this
-// only at the outermost level. Run node --predictable so the process-wide flip
-// has no W^X race with a background compiler thread.
+// Flip the whole registered code range RW<->RX via mprotect. Nesting is handled
+// by RwxMemoryWriteScope, which calls this only at the outermost level. Run node
+// --predictable so the process-wide flip has no W^X race with a background
+// compiler thread.
 namespace {
 void* g_jit_base = nullptr;
 size_t g_jit_size = 0;
@@ -166,10 +166,8 @@ V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size) {
 }
 V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
   if (g_jit_base != nullptr) {
-    bool ok = OS::SetPermissions(g_jit_base, g_jit_size,
-                                 enable ? OS::MemoryPermission::kReadExecute
-                                        : OS::MemoryPermission::kReadWrite);
-    (void)ok;
+    int prot = enable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE);
+    CHECK_EQ(0, mprotect(g_jit_base, g_jit_size, prot));
   }
 }
 #endif''')
