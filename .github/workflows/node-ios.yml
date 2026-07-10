@@ -139,6 +139,7 @@ jobs:
           set +e
           make -j2 2>&1 | tee build.log
           rc=${PIPESTATUS[0]}
+          echo "make rc=$rc"
           set -e
           echo "=== ccache stats ==="; ccache -s 2>/dev/null | head -20 || true
           if [ "$rc" -ne 0 ]; then
