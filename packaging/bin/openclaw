@@ -1,6 +1,7 @@
-#!/bin/sh
+#!/var/jb/bin/sh
 # OpenClaw CLI wrapper — runs the bundled iOS Node against the OpenClaw entrypoint.
 # Lets you run `openclaw onboard`, `openclaw gateway status`, etc. over SSH.
+# Uses the same JIT+WASM runtime flags as the daemon (see run-gateway.sh).
 PREFIX=/var/jb
 APP="$PREFIX/usr/libexec/openclaw"
 export OPENCLAW_NO_RESPAWN=1
@@ -8,6 +9,10 @@ export HOME="${OPENCLAW_HOME:-$PREFIX/var/lib/openclaw}"
 export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME}"
 export UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-2}"
 export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
-export NODE_OPTIONS="${NODE_OPTIONS:---jitless --max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning}"
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning}"
 mkdir -p "$HOME" "$TMPDIR" 2>/dev/null || true
-exec "$APP/node" "$APP/node_modules/openclaw/openclaw.mjs" "$@"
+exec "$APP/node" \
+  --single-threaded \
+  --wasm-enforce-bounds-checks \
+  --wasm-max-mem-pages=4096 \
+  "$APP/node_modules/openclaw/openclaw.mjs" "$@"
