@@ -1,52 +1,93 @@
-// On-device Node smoke test for the iOS cross-build.
+// Strict on-device smoke test for the iOS cross-build.
 // Answers the make-or-break questions in one run:
-//   1. does the binary execute + report the right version/arch/platform
+//   1. does the binary report the pinned version, arch, and platform
 //   2. does node:sqlite load (OpenClaw's boot-critical datastore)
-//   3. does WebAssembly instantiate (the real JIT proof — fails under --jitless on Node 22)
+//   3. does WebAssembly instantiate (boot-critical in OpenClaw)
 //   4. is JIT codegen stable under a hot loop
-// Run both `./node smoke.mjs` (JIT) and `./node --jitless smoke.mjs` to compare.
+//   5. are bundled TLS roots present
+//
+// Run as:
+//   ./node --predictable --single-threaded smoke.mjs
+//
+// A --jitless run is useful for diagnosis, but correctly exits nonzero because
+// Node 22 disables WebAssembly in that mode and OpenClaw needs WASM.
 
-console.log('NODE_VERSION', process.version);
-console.log('ARCH', process.arch, 'PLATFORM', process.platform);
-console.log('JITLESS_FLAG', process.execArgv.join(' ') || '(none)');
+import assert from "node:assert/strict";
 
-// 1) node:sqlite — boot-critical for OpenClaw
-try {
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(':memory:');
-  db.exec('CREATE TABLE t(x INTEGER); INSERT INTO t VALUES (42);');
-  const row = db.prepare('SELECT x AS x FROM t').get();
-  db.close();
-  console.log('SQLITE_OK', row.x);
-} catch (e) {
-  console.log('SQLITE_FAIL', e.constructor.name, e.message);
+const failures = [];
+
+function recordFailure(check, error) {
+  const detail = error instanceof Error
+    ? error.name + ": " + error.message
+    : String(error);
+  failures.push(check + ": " + detail);
+  console.error(check + "_FAIL", detail);
 }
 
-// 2) WebAssembly — minimal (module (func (export "add") (param i32 i32) (result i32) (i32.add ...)))
+console.log("NODE_VERSION", process.version);
+console.log("ARCH", process.arch, "PLATFORM", process.platform);
+console.log("EXEC_FLAGS", process.execArgv.join(" ") || "(none)");
+
 try {
-  const hex = '0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b';
+  assert.equal(process.version, "v22.19.0");
+  assert.equal(process.arch, "arm64");
+  assert.equal(process.platform, "darwin");
+  assert.ok(process.execArgv.includes("--predictable"), "missing --predictable");
+  assert.ok(process.execArgv.includes("--single-threaded"), "missing --single-threaded");
+  assert.ok(!process.execArgv.includes("--jitless"), "OpenClaw cannot boot with --jitless");
+  console.log("RUNTIME_OK");
+} catch (error) {
+  recordFailure("RUNTIME", error);
+}
+
+// 1) node:sqlite - boot-critical for OpenClaw.
+try {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE t(x INTEGER); INSERT INTO t VALUES (42);");
+  const row = db.prepare("SELECT x AS x FROM t").get();
+  db.close();
+  assert.equal(row.x, 42);
+  console.log("SQLITE_OK", row.x);
+} catch (error) {
+  recordFailure("SQLITE", error);
+}
+
+// 2) WebAssembly - minimal exported i32 add function.
+try {
+  const hex = "0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b";
   const bytes = Uint8Array.from(hex.match(/../g).map((h) => parseInt(h, 16)));
   const { instance } = await WebAssembly.instantiate(bytes);
-  console.log('WASM_OK', instance.exports.add(1, 2));
-} catch (e) {
-  console.log('WASM_FAIL', e.constructor.name, e.message);
+  const result = instance.exports.add(1, 2);
+  assert.equal(result, 3);
+  console.log("WASM_OK", result);
+} catch (error) {
+  recordFailure("WASM", error);
 }
 
-// 3) JIT codegen stability under a hot loop
+// 3) JIT codegen stability under a hot loop.
 try {
-  let s = 0;
-  for (let i = 0; i < 5_000_000; i++) s += i % 7;
-  console.log('LOOP_OK', s);
-} catch (e) {
-  console.log('LOOP_FAIL', e.message);
+  let sum = 0;
+  for (let i = 0; i < 5_000_000; i++) sum += i % 7;
+  assert.equal(sum, 14_999_995);
+  console.log("LOOP_OK", sum);
+} catch (error) {
+  recordFailure("LOOP", error);
 }
 
-// 4) TLS/crypto sanity (bundled CA roots present, no /etc/ssl needed)
+// 4) TLS/crypto sanity: bundled CA roots, with no /etc/ssl dependency.
 try {
-  const tls = await import('node:tls');
-  console.log('TLS_ROOTS', (tls.rootCertificates?.length ?? 0) > 0 ? 'present' : 'MISSING');
-} catch (e) {
-  console.log('TLS_FAIL', e.message);
+  const tls = await import("node:tls");
+  assert.ok((tls.rootCertificates?.length ?? 0) > 0, "bundled root certificates missing");
+  console.log("TLS_ROOTS", "present");
+} catch (error) {
+  recordFailure("TLS", error);
 }
 
-console.log('SMOKE_DONE');
+if (failures.length > 0) {
+  console.error("SMOKE_FAILED", failures.length);
+  for (const failure of failures) console.error("-", failure);
+  process.exitCode = 1;
+} else {
+  console.log("SMOKE_DONE");
+}
