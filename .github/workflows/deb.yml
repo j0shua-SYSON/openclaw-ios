@@ -87,7 +87,7 @@ jobs:
           echo "DEB=$DEB" >> "$GITHUB_ENV"
           ls -la "$DEB"
           echo "=== control ==="; dpkg-deb -I "$DEB"
-          echo "=== contents (head) ==="; dpkg-deb -c "$DEB" | head -40
+          echo "=== contents (head) ==="; dpkg-deb -c "$DEB" | head -40 || true
 
       - name: Publish .deb to release
         env:
