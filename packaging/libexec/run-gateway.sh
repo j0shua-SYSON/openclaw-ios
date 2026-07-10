@@ -1,6 +1,7 @@
-#!/bin/sh
-# OpenClaw gateway daemon launcher (run by launchd). Bounds memory for a 2GB device and
-# pins a fixed writable state dir. Bypasses OpenClaw's macOS daemon installer entirely.
+#!/var/jb/bin/sh
+# OpenClaw gateway daemon launcher (run by launchd). Runs as user `mobile` so the
+# state dir and the `openclaw` CLI share one owner (no root/mobile permission split).
+# Bounds memory for a 2GB device and pins a fixed writable state dir.
 PREFIX=/var/jb
 APP="$PREFIX/usr/libexec/openclaw"
 
@@ -9,21 +10,14 @@ export OPENCLAW_STATE_DIR="$HOME"
 export OPENCLAW_NO_RESPAWN=1
 # iOS has no scutil/dns-sd; skip Bonjour/mDNS to avoid failed spawns + ~5s boot latency.
 export OPENCLAW_DISABLE_BONJOUR=1
-# Point the agent's exec/bash tools at the real on-device bash (rootless path).
-export SHELL="${SHELL:-$PREFIX/usr/bin/bash}"
+export SHELL="${SHELL:-$PREFIX/bin/sh}"
 export UV_THREADPOOL_SIZE=2
 export PATH="$PREFIX/usr/bin:$PREFIX/bin:$PREFIX/usr/sbin:$PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-# TMPDIR is empty for the launchd/root context on this device; give Node a writable one.
 export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 
-# Run jitless. Full JIT (JS + WASM) DOES work on the A9 via the mprotect W^X patch, but only
-# --single-threaded: this chip has no APRR, so W^X is process-global and multi-threaded JIT
-# races itself into a SIGBUS. The gateway relies on worker_threads (multi-threaded), so JIT is
-# out; jitless is safe and boots cleanly. node:sqlite, fetch (native llhttp, not WASM), TLS, and
-# workers all work jitless — only optional WASM extras (tree-sitter etc.) are off.
-# Memory caps in NODE_OPTIONS so child node procs (workers/respawn) inherit them too.
-export NODE_OPTIONS="--jitless --max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning"
+# Memory caps only (NODE_OPTIONS rejects --single-threaded / --wasm-*; those go as
+# direct args below). Child node procs inherit these caps via NODE_OPTIONS.
+export NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning"
 
 # Default fd limit on-device is only 256 — too low for a Node server (EMFILE). Raise it.
 ulimit -n 8192 2>/dev/null || ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/dev/null || true
@@ -31,4 +25,22 @@ ulimit -n 8192 2>/dev/null || ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/de
 mkdir -p "$HOME" "$TMPDIR" 2>/dev/null || true
 cd "$HOME" 2>/dev/null || true
 
-exec "$APP/node" "$APP/node_modules/openclaw/openclaw.mjs" gateway --port 18789
+ENTRY="$APP/node_modules/openclaw/openclaw.mjs"
+if [ ! -f "$ENTRY" ]; then
+  echo "[run-gateway] FATAL: OpenClaw entry not found at $ENTRY" >&2
+  exit 1
+fi
+
+# Runtime mode (see the V8 patch set): full JIT + WebAssembly work on the A9 via
+# mprotect W^X, but ONLY single-threaded (the flip is process-wide) and with WASM
+# guard regions disabled (iOS refuses the 32GB reservation). --jitless is NOT an
+# option: it disables WebAssembly, which undici/fetch needs, so the gateway can't
+# reach any API. worker_threads still work under --single-threaded.
+#   --single-threaded            : no background V8 threads racing the W^X flip
+#   --wasm-enforce-bounds-checks : explicit WASM bounds checks (guard regions are off)
+#   --wasm-max-mem-pages=4096    : cap WASM memory reservation at 256MB (not 4GB)
+exec "$APP/node" \
+  --single-threaded \
+  --wasm-enforce-bounds-checks \
+  --wasm-max-mem-pages=4096 \
+  "$ENTRY" gateway --port 18789

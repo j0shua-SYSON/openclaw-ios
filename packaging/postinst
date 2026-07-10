@@ -1,35 +1,45 @@
-#!/bin/sh
+#!/var/jb/bin/sh
 set -e
 PREFIX=/var/jb
 APP="$PREFIX/usr/libexec/openclaw"
 PLIST="$PREFIX/Library/LaunchDaemons/ai.openclaw.gateway.plist"
 NODE="$APP/node"
+STATE="$PREFIX/var/lib/openclaw"
 
 case "$1" in
   configure|"")
-    mkdir -p "$PREFIX/var/lib/openclaw" "$PREFIX/var/log" 2>/dev/null || true
+    mkdir -p "$STATE" "$PREFIX/var/log" 2>/dev/null || true
 
     # Pre-create a minimal config so the gateway boots (gateway.mode=local) instead of
     # exiting 78 and crash-looping under launchd before the user runs `openclaw onboard`.
-    CFG="$PREFIX/var/lib/openclaw/openclaw.json"
+    CFG="$STATE/openclaw.json"
     if [ ! -f "$CFG" ]; then
-      printf '{\n  "gateway": { "mode": "local" }\n}\n' > "$CFG"
-      chmod 0600 "$CFG" 2>/dev/null || true
+      printf '{\n  "gateway": { "mode": "local" }\n}\n' > "$CFG" 2>/dev/null || true
     fi
 
     # Root git needs safe.directory to avoid "dubious ownership" aborts (e.g. self-update).
-    GITCFG="$PREFIX/var/lib/openclaw/.gitconfig"
+    GITCFG="$STATE/.gitconfig"
     if [ ! -f "$GITCFG" ]; then
-      printf '[safe]\n\tdirectory = *\n' > "$GITCFG"
+      printf '[safe]\n\tdirectory = *\n' > "$GITCFG" 2>/dev/null || true
     fi
+
+    # The daemon AND the `openclaw` CLI both run as `mobile`, so hand the whole state
+    # tree to mobile (uid 501). This is what fixes the `onboard` EACCES on the state dir.
+    chown -R mobile "$STATE" 2>/dev/null || chown -R 501 "$STATE" 2>/dev/null || true
+    chmod 0700 "$STATE" 2>/dev/null || true
+    chmod 0600 "$CFG" 2>/dev/null || true
+
+    # Log file writable by the mobile daemon.
+    LOG="$PREFIX/var/log/openclaw.log"
+    [ -f "$LOG" ] || : > "$LOG" 2>/dev/null || true
+    chown mobile "$LOG" 2>/dev/null || chown 501 "$LOG" 2>/dev/null || true
 
     chmod 0755 "$NODE" "$APP/run-gateway.sh" "$PREFIX/usr/bin/openclaw" 2>/dev/null || true
     chown root:wheel "$PLIST" 2>/dev/null || true
     chmod 0644 "$PLIST" 2>/dev/null || true
 
     # Defensive (re)sign node with JIT entitlements using the on-device ldid.
-    # The binary is already ldid-signed in CI; Dopamine trust-caches adhoc sigs at spawn,
-    # so this is belt-and-suspenders and non-fatal.
+    # The binary is already ldid-signed in CI; this is belt-and-suspenders, non-fatal.
     if [ -x "$PREFIX/usr/bin/ldid" ] && [ -f "$APP/entitlements.plist" ]; then
       "$PREFIX/usr/bin/ldid" -S"$APP/entitlements.plist" "$NODE" 2>/dev/null || true
     fi

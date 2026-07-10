@@ -14,7 +14,7 @@
 		<string>/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 	<key>UserName</key>
-	<string>root</string>
+	<string>mobile</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>

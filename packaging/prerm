@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/var/jb/bin/sh
 set -e
 PREFIX=/var/jb
 PLIST="$PREFIX/Library/LaunchDaemons/ai.openclaw.gateway.plist"
