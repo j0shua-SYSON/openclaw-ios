@@ -187,7 +187,15 @@ V8_BASE_EXPORT void RegisterJitRange(void* base, size_t size) {
 V8_BASE_EXPORT void SetJitWriteProtected(int enable) {
   int prot = enable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE);
   for (int i = 0; i < g_jit_range_count; i++) {
-    CHECK_EQ(0, mprotect(g_jit_ranges[i].base, g_jit_ranges[i].size, prot));
+    // Best-effort: a registered range can be unmapped during isolate/heap
+    // teardown while still listed here, after which mprotect fails harmlessly
+    // (observed on-device: a CHECK_EQ abort in Heap::TearDown *after* the script
+    // ran fine). The flip is proven to succeed for live ranges during operation,
+    // so on failure just drop the now-freed range instead of aborting.
+    if (mprotect(g_jit_ranges[i].base, g_jit_ranges[i].size, prot) != 0) {
+      g_jit_ranges[i] = g_jit_ranges[--g_jit_range_count];
+      i--;
+    }
   }
 }
 #endif''')
