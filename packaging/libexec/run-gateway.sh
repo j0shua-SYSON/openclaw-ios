@@ -17,7 +17,11 @@ export PATH="$PREFIX/usr/bin:$PREFIX/bin:$PREFIX/usr/sbin:$PREFIX/sbin:/usr/bin:
 # TMPDIR is empty for the launchd/root context on this device; give Node a writable one.
 export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 
-# --jitless is REQUIRED on the A9: full V8 JIT SIGBUSes (no APRR, MAP_JIT unsupported).
+# Run jitless. Full JIT (JS + WASM) DOES work on the A9 via the mprotect W^X patch, but only
+# --single-threaded: this chip has no APRR, so W^X is process-global and multi-threaded JIT
+# races itself into a SIGBUS. The gateway relies on worker_threads (multi-threaded), so JIT is
+# out; jitless is safe and boots cleanly. node:sqlite, fetch (native llhttp, not WASM), TLS, and
+# workers all work jitless — only optional WASM extras (tree-sitter etc.) are off.
 # Memory caps in NODE_OPTIONS so child node procs (workers/respawn) inherit them too.
 export NODE_OPTIONS="--jitless --max-old-space-size=512 --max-semi-space-size=16 --disable-warning=ExperimentalWarning"
 
