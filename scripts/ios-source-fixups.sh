@@ -279,7 +279,29 @@ patch("deps/v8/src/wasm/wasm-code-manager.cc",
 
   if (V8_UNLIKELY(!success)) {''')
 
-print("fixup: iOS full-JIT via mprotect W^X (multi-range flip; JS code range + WASM code regions; build_config/platform.h/platform-darwin/code-range/wasm-code-manager)")
+# (F) backing-store.cc: iOS refuses V8's multi-GB WASM guard-region reservation
+# (kFullGuardSize64 = 32GB / kFullGuardSize32 = 10GB), so WebAssembly.Memory can't
+# allocate at all -> undici's llhttp throws "Cannot allocate Wasm memory" and fetch
+# is dead (which breaks OpenClaw). Force guard regions OFF on iOS: the reservation
+# then shrinks to the memory's byte capacity. Pair with --wasm-enforce-bounds-checks
+# (explicit bounds checks in codegen) and --wasm-max-mem-pages=<cap> (so an unbounded
+# memory reserves the cap, not 4GB).
+patch("deps/v8/src/objects/backing-store.cc",
+'''  bool guards = trap_handler::IsTrapHandlerEnabled() &&
+                (wasm_memory == WasmMemoryFlag::kWasmMemory32 ||
+                 (is_wasm_memory64 && v8_flags.wasm_memory64_trap_handling));''',
+'''#if defined(V8_OS_IOS)
+  // iOS refuses the multi-GB guard-region reservation; disable guard regions so a
+  // WASM memory reserves only its byte capacity. Run with --wasm-enforce-bounds-checks
+  // so codegen emits explicit bounds checks instead of relying on the (absent) guard.
+  bool guards = false;
+#else
+  bool guards = trap_handler::IsTrapHandlerEnabled() &&
+                (wasm_memory == WasmMemoryFlag::kWasmMemory32 ||
+                 (is_wasm_memory64 && v8_flags.wasm_memory64_trap_handling));
+#endif''')
+
+print("fixup: iOS full-JIT via mprotect W^X + WASM guard-region off (multi-range flip; JS+WASM code regions; backing-store; build_config/platform.h/platform-darwin/code-range/wasm-code-manager/backing-store)")
 PY
 
 # --- c-ares ---
