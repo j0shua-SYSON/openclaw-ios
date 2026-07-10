@@ -31,7 +31,9 @@ console.log("EXEC_FLAGS", process.execArgv.join(" ") || "(none)");
 try {
   assert.equal(process.version, "v22.19.0");
   assert.equal(process.arch, "arm64");
-  assert.equal(process.platform, "darwin");
+  // NOTE: a Node built with --dest-os=ios reports process.platform === "ios"
+  // (non-standard; NOT "darwin"). Verified on-device. Do not "correct" this.
+  assert.equal(process.platform, "ios");
   assert.ok(process.execArgv.includes("--predictable"), "missing --predictable");
   assert.ok(process.execArgv.includes("--single-threaded"), "missing --single-threaded");
   assert.ok(!process.execArgv.includes("--jitless"), "OpenClaw cannot boot with --jitless");
